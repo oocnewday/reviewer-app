@@ -310,6 +310,39 @@ textarea.t.dict-target{border-color:var(--cobalt);box-shadow:0 0 0 1px var(--cob
 .dbtns .btn{min-height:46px;font-size:.95rem}
 .saved-line{font-size:.82rem;color:var(--ok);margin-top:10px;min-height:1.2em}
 .sheet .foot .btn.ok{flex:1.4}
+
+/* ===== v6: per-field mic, two ways back ===== */
+.mf{border:1px solid var(--line);border-radius:12px;background:var(--surface);transition:border-color .15s, box-shadow .15s;overflow:hidden}
+.mf:focus-within{border-color:var(--cobalt);box-shadow:0 0 0 1px var(--cobalt)}
+.mf > textarea.t,.mf > input.t{border:0;border-radius:0;box-shadow:none!important;background:transparent}
+.mf > textarea.t.dict-target{box-shadow:none}
+.mf-bar{display:flex;align-items:center;gap:8px;padding:6px 8px;border-top:1px dashed var(--line);background:var(--paper);min-height:48px}
+.mf-mic{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:999px;background:var(--cobalt);color:#fff;padding:7px 14px 7px 12px;min-height:38px;font-weight:600;cursor:pointer;flex:0 0 auto}
+@media (prefers-color-scheme:dark){.mf-mic{color:#0E1426}}
+.mf-mic.on{background:var(--warn);animation:pulse 1.2s infinite}
+.mf-lang{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 12px;min-height:34px;cursor:pointer;font-weight:600;font-size:.85rem;flex:0 0 auto;margin-inline-start:auto}
+.mf-undo{border:0;background:none;color:var(--ink-2);cursor:pointer;font-size:.82rem;flex:0 0 auto;padding:4px}
+.mf-live{flex:1 1 auto;min-width:0;color:var(--ink-3);font-style:italic;font-size:.88rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mf-wave{display:none;align-items:flex-end;gap:3px;height:18px;flex:0 0 auto}
+.mf-wave i{display:block;width:3px;height:6px;border-radius:2px;background:var(--warn);animation:wave 0.9s ease-in-out infinite}
+.mf-wave i:nth-child(2){animation-delay:.12s}.mf-wave i:nth-child(3){animation-delay:.24s}.mf-wave i:nth-child(4){animation-delay:.36s}.mf-wave i:nth-child(5){animation-delay:.48s}
+@keyframes wave{0%,100%{height:5px}50%{height:18px}}
+.mf.listening{border-color:var(--warn);box-shadow:0 0 0 3px rgba(174,63,40,.14)}
+.mf.listening .mf-wave{display:inline-flex}
+.mf.listening .mf-bar{background:var(--warn-2)}
+.mf-hint{font-size:.82rem;color:var(--ink-3)}
+.mf-msg{font-size:.85rem;color:var(--warn);margin-top:4px}
+.mf-msg:empty{display:none}
+@media (prefers-reduced-motion:reduce){.mf-wave i{animation:none;height:10px}}
+.lbl-sub{font-weight:400;font-size:.85rem;color:var(--ink-2)}
+.ucards{display:grid;gap:10px}
+.ucard{display:flex;gap:12px;align-items:flex-start;text-align:start;width:100%;border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px;cursor:pointer}
+.ucard[aria-pressed="true"]{border-color:var(--cobalt);box-shadow:inset 0 0 0 2px var(--cobalt);background:var(--cobalt-2)}
+.ucard .uic{flex:0 0 40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--paper);font-size:1.25rem}
+.ucard .utx{display:flex;flex-direction:column;gap:3px}
+.ucard b{font-size:1.02rem}
+.ucard .uwhat{font-weight:600;color:var(--cobalt);font-size:.92rem}
+.ucard .usub{color:var(--ink-2);font-size:.88rem;line-height:1.55}
 </style>
 </head>
 <body>
@@ -354,12 +387,15 @@ function errText(e) {
   if (/Invalid login credentials/i.test(m)) return 'البريد أو كلمة السر غير صحيحة.';
   if (/Email not confirmed/i.test(m)) return 'البريد لم يُؤكَّد بعد. افتح رسالة التأكيد في بريدك ثم سجّل الدخول.';
   if (/User already registered/i.test(m)) return 'هذا البريد مسجّل بالفعل. استخدم تسجيل الدخول.';
+  if (/Edit reason too short/i.test(m)) return 'اكتب سبب واضح للتعديل (كلمتين على الأقل)، عشان باقي الفريق وClaude يفهموا اتعدّل ليه.';
   if (/Password should be/i.test(m)) return 'كلمة السر قصيرة: 6 أحرف على الأقل.';
   if (/revision request needs/i.test(m)) return 'طلب التعديل يحتاج نوعًا أو ملاحظة مكتوبة.';
   if (/already have an open request/i.test(m)) return 'عندك طلب مفتوح بالفعل على السؤال ده؛ عدّله بدل ما تعمل طلب جديد.';
   if (/Request is not open/i.test(m)) return 'الطلب ده اتنفّذ أو اتلغى بالفعل. حدّث الصفحة.';
   if (/Not your/i.test(m)) return 'ده مش طلبك/اعتمادك، فمش هتقدر تغيّره.';
   if (/not approved|No approval/i.test(m)) return 'السؤال مش معتمد حاليًا.';
+  if (/Nothing to undo/i.test(m)) return 'مفيش خطوة سابقة ترجعلها في السؤال ده. حدّث الصفحة.';
+  if (/Already original/i.test(m)) return 'السؤال أصلًا على نسخته الأصلية.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'لا يوجد اتصال بالإنترنت. تأكد من الاتصال وحاول مرة أخرى.';
   return m;
 }
@@ -605,7 +641,8 @@ const FOLDERS = [
   { id: 'new', label: 'لم تُفتح', test: r => r.status === 'in_review' && !r.seen },
   { id: 'seen', label: 'فُتحت بلا قرار', test: r => r.status === 'in_review' && r.seen },
   { id: 'requested', label: 'طُلب تعديلها', test: r => r.status === 'needs_revision' },
-  { id: 'revised', label: 'عدّلها Claude', test: r => r.status === 'revised' },
+  { id: 'revised', label: 'عدّلها Claude', test: r => r.status === 'revised' && r.last_edit_label !== 'reviewer_quick_edit' },
+  { id: 'quick', label: 'عُدّلت سريعًا', test: r => r.status === 'revised' && r.last_edit_label === 'reviewer_quick_edit' },
   { id: 'approved', label: 'معتمدة', test: r => r.status === 'approved' },
   { id: 'all', label: 'الكل', test: () => true },
 ];
@@ -658,7 +695,8 @@ function reasonTags(r, showStatus) {
   if (r.match_status === 'disagree') t.push('<span class="tag warn">مختلف مع المصدر</span>');
   if (r.ai_confidence) t.push(`<span class="tag ${r.ai_confidence === 'low' ? 'amber' : ''}">ثقة ${CONF[r.ai_confidence] || r.ai_confidence}</span>`);
   if (r.is_incomplete) t.push('<span class="tag amber">ناقص في المصدر</span>');
-  if (r.status === 'revised') t.push(`<span class="tag cobalt">جولة ${(r.rounds || 1) + 1}</span>`);
+  if (r.status === 'revised' && r.last_edit_label === 'reviewer_quick_edit') t.push(`<span class="tag cobalt">⚡ عدّله سريعًا${r.last_edit_by ? ': ' + esc(r.last_edit_by) : ''}</span>`);
+  else if (r.status === 'revised') t.push(`<span class="tag cobalt">جولة ${(r.rounds || 1) + 1}</span>`);
   if (Drafts.qids().has(r.qid)) t.push('<span class="tag amber">📝 مسودة لم تُرسل</span>');
   if (r.my_open_request_id) t.push('<span class="tag amber">طلبك مفتوح</span>');
   else if (r.open_requests) t.push('<span class="tag amber">طلب من مراجع آخر</span>');
@@ -814,8 +852,9 @@ function renderQuestion() {
       <p style="margin:8px 0 0"><b>اتعمل:</b> ${nl(lr.review.resolution_note || '')}</p>
       <p class="small muted" style="margin:8px 0 0">التغييرات مظللة <mark class="ins">هكذا</mark>، والمحذوف <del class="rem">مشطوب</del>.</p>
     </section>` : kind === 'quick' ? `
-    <section class="panel round2"><h3>عُدّل تعديلًا سريعًا</h3><p style="margin:0">${nl(v.change_note || '')}</p>
-      <p class="small muted" style="margin:6px 0 0">سيراجع Claude اتساق الشرح في أول محادثة تعديلات. التغييرات مظللة.</p></section>` : '';
+    <section class="panel round2"><h3>⚡ عُدّل تعديلًا سريعًا${row?.last_edit_by ? ` بواسطة ${esc(row.last_edit_by)}` : ''}</h3>
+      <p style="margin:0"><b>السبب:</b> ${nl(v.change_note || '')}</p>
+      <p class="small muted" style="margin:6px 0 0">التعديل محفوظ ومستني الاعتماد، وClaude هيراجع اتساق الشرح معاه في أول محادثة تعديلات. التغييرات مظللة <mark class="ins">هكذا</mark>.</p></section>` : '';
 
   const reqPanel = openReqs.length ? openReqs.map(r => `
     <section class="panel mine"><h3>${r.reviewer_id === me ? 'طلبك المفتوح' : `طلب مفتوح من ${esc(r.reviewer_name || 'مراجع')}`} <span class="small muted">(${new Date(r.created_at).toLocaleString('ar-EG')})</span></h3>
@@ -863,19 +902,19 @@ function renderQuestion() {
   // action bar by state
   let bar = '';
   const qe = access >= 3 ? `<button class="btn sec" id="qe">⚡ ${dQe ? 'أكمل التعديل السريع' : 'تعديل سريع'}</button>` : '';
+  const un = b.undo && (b.undo.previous || b.undo.original) ? `<button class="btn warn" id="undo">↩️ رجوع…</button>` : '';
+  const row2 = (...btns) => { const x = btns.filter(Boolean); return x.length ? `<div class="row2" style="grid-template-columns:repeat(${x.length},1fr)">${x.join('')}</div>` : ''; };
   if (access >= 2) {
     if (q.status === 'in_review' || q.status === 'revised') {
-      bar = `<div id="apnote" class="notebox ${S.noteOpen ? '' : 'hidden'}"><label class="f" for="apnote-t" style="margin-top:0">ملاحظة للطلاب تُنشر مع الاعتماد</label><textarea class="t" id="apnote-t" dir="auto" placeholder="تظهر للطلاب تحت الشرح">${esc(S.noteDraft || '')}</textarea><div class="dict" data-dict-for="apnote-t"></div><div class="saved-line" id="apnote-saved">${S.noteDraft ? 'ملاحظتك محفوظة، وهتتنشر لما تضغط موافق.' : 'بتتحفظ تلقائيًا وإنت بتكتب.'}</div></div>
+      bar = `<div id="apnote" class="notebox ${S.noteOpen ? '' : 'hidden'}"><label class="f" for="apnote-t" style="margin-top:0">ملاحظة للطلاب تُنشر مع الاعتماد</label><textarea class="t" id="apnote-t" dir="auto" placeholder="تظهر للطلاب تحت الشرح">${esc(S.noteDraft || '')}</textarea><div class="saved-line" id="apnote-saved">${S.noteDraft ? 'ملاحظتك محفوظة، وهتتنشر لما تضغط موافق.' : 'بتتحفظ تلقائيًا وإنت بتكتب.'}</div></div>
         <div class="two"><button class="btn ok" id="approve">✅ موافق</button><button class="btn primary" id="revise">${dReq ? '📝 أكمل طلب التعديل' : '✏️ محتاج تعديل'}</button></div>
-        <div class="row2 ${qe ? '' : 'one'}"><button class="btn sec" id="addnote" aria-expanded="${!!S.noteOpen}">📝 ${S.noteOpen ? 'إخفاء ملاحظة الطلاب' : 'ملاحظة للطلاب مع الاعتماد'}</button>${qe}</div>`;
+        ${row2(`<button class="btn sec" id="addnote" aria-expanded="${!!S.noteOpen}">📝 ${S.noteOpen ? 'إخفاء الملاحظة' : 'ملاحظة للطلاب'}</button>`, qe, un)}`;
     } else if (q.status === 'needs_revision') {
       bar = `<div class="two"><button class="btn ok" id="approve-anyway">✅ اعتمده كما هو</button><button class="btn primary" id="revise">✏️ ${myReq ? (editValid ? 'أكمل تعديل طلبك' : 'عدّل طلبك') : (dReq ? 'أكمل طلبك' : 'أضف طلبك')}</button></div>
-        <div class="row2 ${myReq && qe ? '' : 'one'}">${myReq ? `<button class="btn warn" id="cancel-req">↩️ ألغِ طلبك</button>` : ''}${qe}</div>`;
-      if (!myReq && !qe) bar = bar.replace(/<div class="row2 one"><\/div>/, '');
+        ${row2(un, qe)}`;
     } else if (q.status === 'approved') {
-      const canUndo = row?.my_can_undo_approval;
-      bar = `<div class="${canUndo ? 'two' : ''}"><button class="btn primary ${canUndo ? '' : 'block'}" id="revise">✏️ اطلب تعديلًا</button>${canUndo ? `<button class="btn warn" id="undo-approve">↩️ تراجع عن الاعتماد</button>` : ''}</div>
-        ${qe ? `<div class="row2 one">${qe}</div>` : ''}`;
+      bar = `<div class="${un ? 'two' : ''}"><button class="btn primary ${un ? '' : 'block'}" id="revise">✏️ اطلب تعديلًا</button>${un}</div>
+        ${row2(qe)}`;
     }
   }
 
@@ -914,6 +953,7 @@ function renderQuestion() {
   on('prev', () => go(nav.prev)); on('next', () => go(nav.next));
   on('toggle-extra', () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); });
   on('qe', openQuickEdit);
+  on('undo', openUndo);
   on('approve', () => {
     if (dReq && !confirm('عندك طلب تعديل لم يُرسل على السؤال ده. الاعتماد هيمسح المسودة دي. تكمل؟')) return;
     doApprove(document.getElementById('apnote-t')?.value);
@@ -953,7 +993,7 @@ function renderQuestion() {
     await Drafts.clear(q.qid, from);
     openRevision(to === 'edit_request' ? { edit: myReq } : {});
   });
-  $app.querySelectorAll('.dict[data-dict-for]').forEach(d => mountDictation(d, () => document.getElementById(d.dataset.dictFor), 'ar-EG'));
+  attachMic(document.getElementById('apnote-t'), 'ar-EG');
   if (q.handwritten_image_path) signed('handwritten-crops', q.handwritten_image_path).then(u => { const im = document.getElementById('handimg'); if (im && u) im.src = u; });
   $app.querySelectorAll('audio[data-voice]').forEach(a => signed('voice-notes', a.dataset.voice).then(u => { if (u) a.src = u; }));
   attachSwipe(document.getElementById('qmain'), () => go(nav.next), () => go(nav.prev));
@@ -1057,7 +1097,41 @@ function mountDictation(box, getTarget, defLang) {
     if (!D.stack.length) ui.undo.classList.add('hidden');
   };
 }
-function setMic(ui, on) { if (!ui) return; ui.mic.classList.toggle('on', on); ui.mic.setAttribute('aria-pressed', on); ui.mic.querySelector('span').textContent = on ? 'إيقاف' : 'اتكلم وأنا أكتب'; if (!on) ui.interim.textContent = ''; }
+const MIC_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/><path d="M8 21h8"/></svg>';
+// every place the reviewer writes gets its own mic: speak and the words appear in that field
+function attachMic(el, defLang = 'ar-EG') {
+  if (!el || el.dataset.mic) return; el.dataset.mic = '1';
+  const box = document.createElement('div'); box.className = 'mf';
+  el.parentNode.insertBefore(box, el); box.appendChild(el);
+  const bar = document.createElement('div'); bar.className = 'mf-bar'; box.appendChild(bar);
+  const msg = document.createElement('div'); msg.className = 'mf-msg'; msg.setAttribute('role', 'alert'); box.after(msg);
+  if (!SRClass) { bar.innerHTML = `<span class="mf-hint">🎙️ للكتابة بالصوت: اضغط في الخانة ثم ميكروفون الكيبورد</span>`; return; }
+  const ui = { box, lang: defLang, msg };
+  bar.innerHTML = `<button type="button" class="mf-mic" aria-pressed="false" aria-label="اتكلم وأنا أكتب">${MIC_SVG}<span class="mf-t">اتكلم</span></button>
+    <span class="mf-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+    <span class="mf-live" aria-live="polite"></span>
+    <button type="button" class="mf-undo hidden" title="امسح آخر جملة اتكتبت بالصوت">↶ آخر جملة</button>
+    <button type="button" class="mf-lang" aria-label="لغة الكلام">${defLang === 'en-US' ? 'EN' : 'عربي'}</button>`;
+  ui.mic = bar.querySelector('.mf-mic'); ui.label = bar.querySelector('.mf-t'); ui.interim = bar.querySelector('.mf-live'); ui.undo = bar.querySelector('.mf-undo');
+  ui.mic.onclick = () => (D.active && D.ui === ui) ? stopDictation() : startDictation(ui, el);
+  const langBtn = bar.querySelector('.mf-lang');
+  langBtn.onclick = () => {
+    ui.lang = ui.lang === 'ar-EG' ? 'en-US' : 'ar-EG'; langBtn.textContent = ui.lang === 'en-US' ? 'EN' : 'عربي';
+    if (D.active && D.ui === ui) { stopDictation(); startDictation(ui, el); }
+  };
+  ui.undo.onclick = () => {
+    const last = D.stack.pop();
+    if (last && el.value.endsWith(last)) { el.value = el.value.slice(0, -last.length).replace(/\s+$/, ''); el.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (!D.stack.length) ui.undo.classList.add('hidden');
+  };
+}
+function setMic(ui, on) {
+  if (!ui) return;
+  ui.mic.classList.toggle('on', on); ui.mic.setAttribute('aria-pressed', on);
+  const lbl = ui.label || ui.mic.querySelector('span'); if (lbl) lbl.textContent = on ? 'إيقاف' : (ui.label ? 'اتكلم' : 'اتكلم وأنا أكتب');
+  ui.box && ui.box.classList.toggle('listening', on);
+  if (!on) ui.interim.textContent = '';
+}
 function startDictation(ui, target) {
   if (!target) return;
   if (V.on) stopRec();
@@ -1067,6 +1141,7 @@ function startDictation(ui, target) {
   setMic(ui, true);
   const run = () => {
     const r = new SRClass(); r.lang = ui.lang; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+    D.stack = D.stack || [];
     r.onresult = ev => {
       let interim = '';
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
@@ -1121,7 +1196,7 @@ async function startRec(sheet, onBlob) {
     V.blob = new Blob(V.chunks, { type: V.mime.split(';')[0] });
     const play = sheet.querySelector('#rec-play'); if (play) { play.src = URL.createObjectURL(V.blob); play.classList.remove('hidden'); }
     sheet.querySelector('#rec-del')?.classList.remove('hidden');
-    state.textContent = `تسجيل جاهز ومحفوظ على الجهاز (${Math.round(V.blob.size / 1024)} KB). Claude بيقرا النص بس، فاكتب المطلوب في الملاحظة كمان.`;
+    state.textContent = `تسجيل جاهز ومحفوظ على الجهاز (${Math.round(V.blob.size / 1024)} KB). Claude بيقرا النص بس، فاكتب (أو اتكلم) المطلوب تعديله في الخانة فوق كمان.`;
     onBlob && onBlob(V.blob);
   };
   V.rec.start(1000); V.on = true; V.t0 = Date.now(); btn.textContent = '■ إيقاف التسجيل';
@@ -1162,12 +1237,10 @@ async function openRevision(pre = {}) {
     <div class="types" id="rv-types">${types.map(t => `<button type="button" class="chip" data-type="${esc(t.value)}" aria-pressed="${st.type === t.value}">${esc(t.label)}</button>`).join('')}</div>
     <div id="rv-letters" class="${st.type === 'change_answer' ? '' : 'hidden'}"><label class="f">الإجابة الصحيحة في رأيك</label>
       <div class="letters">${letters.map(k => `<button type="button" data-letter="${esc(k)}" aria-pressed="${st.answer === k}">${esc(k)}</button>`).join('')}</div></div>
-    <label class="f" for="rv-comment">ملاحظتك للفريق (اكتب أو اتكلم)</label>
-    <textarea class="t" id="rv-comment" dir="auto" rows="4" placeholder="مثال: بسّط شرح الاختيار B">${esc(st.comment)}</textarea>
-    <div class="dict" id="rv-dict"></div>
-    <label class="f" for="rv-student">ملاحظة للطلاب (اختيارية)</label>
-    <textarea class="t" id="rv-student" dir="auto" rows="2" placeholder="تظهر في التطبيق فقط لو كتبتها">${esc(st.student)}</textarea>
-    <p class="target-hint" style="margin:4px 0 0">زر "اتكلم" بيكتب في آخر خانة ضغطت عليها.</p>
+    <label class="f" for="rv-comment">المطلوب تعديله <span class="lbl-sub">(Claude بينفذه، والفريق بيشوفه)</span></label>
+    <textarea class="t" id="rv-comment" dir="auto" rows="4" placeholder="مثال: بسّط شرح الاختيار B، واذكر إن الـ IOP في الأطفال بيتقاس تحت تخدير">${esc(st.comment)}</textarea>
+    <label class="f" for="rv-student">ملاحظة للطلاب <span class="lbl-sub">(اختيارية، تظهر في تطبيق الطلاب)</span></label>
+    <textarea class="t" id="rv-student" dir="auto" rows="2" placeholder="تظهر للطلاب تحت الشرح لو كتبتها">${esc(st.student)}</textarea>
     <label class="f">تسجيل صوتي (اختياري، للفريق)</label>
     ${st.keepVoice ? `<div id="old-voice"><audio class="audio" controls preload="none" data-voice="${esc(st.keepVoice)}"></audio><button class="linkbtn quiet small" type="button" id="old-voice-del">احذف التسجيل القديم</button></div>` : ''}
     ${canRec ? `<div class="rec"><button class="btn" id="rec-btn" type="button">● ${V.blob ? 'سجّل من جديد' : 'سجّل فويس'}</button><span id="rec-state" class="small muted" aria-live="polite">${V.blob ? 'تسجيلك محفوظ على الجهاز.' : ''}</span></div>
@@ -1194,9 +1267,7 @@ async function openRevision(pre = {}) {
     if (isEmpty() || unchanged()) { if (Drafts.get(q.qid, kind)) Drafts.clear(q.qid, kind); return; }
     Drafts.save(q.qid, kind, { type: st.type, answer: st.answer, comment: $('#rv-comment').value, student: $('#rv-student').value, keepVoice: st.keepVoice, hasVoice: !!V.blob, reviewId: edit?.id || null });
   };
-  let lastFocus = $('#rv-comment');
-  ['#rv-comment', '#rv-student'].forEach(s => { const t = $(s); t.addEventListener('focus', () => { lastFocus = t; if (D.active) { const ui = D.ui; stopDictation(); startDictation(ui, t); } }); t.addEventListener('input', persist); });
-  mountDictation($('#rv-dict'), () => lastFocus, 'ar-EG');
+  ['#rv-comment', '#rv-student'].forEach(s => { const t = $(s); t.addEventListener('input', persist); attachMic(t, 'ar-EG'); });
   sheet.querySelectorAll('[data-type]').forEach(bt => bt.onclick = () => {
     st.type = st.type === bt.dataset.type ? '' : bt.dataset.type;
     sheet.querySelectorAll('[data-type]').forEach(x => x.setAttribute('aria-pressed', x.dataset.type === st.type));
@@ -1228,7 +1299,7 @@ async function openRevision(pre = {}) {
       if (!st.answer) { err.textContent = 'اختار الإجابة الصحيحة في رأيك (الحروف فوق).'; return; }
       comment = `الإجابة الصحيحة: ${st.answer}` + (comment ? `\n${comment}` : '');
     }
-    if (!st.type && !comment) { err.textContent = V.blob ? 'Claude بيقرا النص بس: اكتب المطلوب أو اختار نوع التعديل.' : 'اختار نوع التعديل أو اكتب ملاحظتك.'; return; }
+    if (!st.type && !comment) { err.textContent = V.blob ? 'Claude بيقرا النص بس: اكتب المطلوب تعديله أو اختار نوع التعديل.' : 'اختار نوع التعديل أو اكتب المطلوب تعديله.'; return; }
     btn.disabled = true; err.textContent = '';
     try {
       let path = st.keepVoice;
@@ -1265,8 +1336,7 @@ function openQuickEdit() {
   const { sheet, close } = openSheet(`
     <div class="sheet-head"><h2>تعديل سريع للسؤال ${esc(q.qid_display)}</h2>
     ${saved ? `<div class="draft-note">رجّعتلك تعديلاتك اللي ما اتحفظتش (آخر حفظ: ${esc(draftAge(saved))}).</div>` : ''}
-    <p class="hint">للتعديلات البسيطة فقط. الإجابة الصحيحة لا تتغير من هنا؛ لتغييرها اطلب تعديلًا بنوع "تغيير الإجابة". زر "اتكلم" يكتب في آخر خانة ضغطت عليها.</p></div>
-    <div class="dict" id="qe-dict"></div>
+    <p class="hint">للتعديلات البسيطة فقط. الإجابة الصحيحة لا تتغير من هنا؛ لتغييرها اطلب تعديلًا بنوع "تغيير الإجابة". في كل خانة زرار 🎙️ تكتب بيه بصوتك.</p></div>
     <label class="f" for="qe-stem">نص السؤال</label>${ta('qe-stem', v.stem)}
     <label class="f" for="qe-main">الشرح (تحت السؤال)</label>${ta('qe-main', v.explanation_main, 'en', 4)}
     <label class="f" for="qe-extra">مزيد من الشرح (تحت السؤال)</label>${ta('qe-extra', v.explanation_extra, 'en', 4)}
@@ -1278,7 +1348,7 @@ function openQuickEdit() {
     </fieldset>`).join('')}
     <label class="f" for="qe-ref">تفاصيل المرجع</label><input class="t" id="qe-ref" dir="ltr" value="${esc(v.reference_detail || '')}">
     <label class="f" for="qe-note">ملاحظة للطلاب</label>${ta('qe-note', v.student_note, '', 2)}
-    <label class="f" for="qe-why">سبب التعديل (مطلوب)</label><input class="t" id="qe-why" dir="auto">
+    <label class="f" for="qe-why">سبب التعديل (مطلوب، كلمتين على الأقل)</label><input class="t" id="qe-why" dir="auto" placeholder="مثال: تصحيح خطأ إملائي في الاختيار C">
     <div class="saved-line" id="qe-saved" aria-live="polite">${saved ? `✓ محفوظ (${esc(draftAge(saved))})` : 'تعديلاتك بتتحفظ تلقائيًا لحظة بلحظة لحد ما تأكدها أو تلغيها.'}</div>
     <div class="err" id="qe-err" role="alert"></div>
     <div class="foot"><button class="btn ok" id="qe-save">✓ تأكيد حفظ التعديل</button><button class="btn warn" id="qe-cancel" type="button">✕ إلغاء التعديل</button></div>
@@ -1296,9 +1366,7 @@ function openQuickEdit() {
   const unlisten = savedLine($('#qe-saved'));
   const persist = () => { if (!dirty()) { if (Drafts.get(q.qid, 'quick_edit')) Drafts.clear(q.qid, 'quick_edit'); return; } Drafts.save(q.qid, 'quick_edit', { fields: Object.fromEntries(fields.filter(x => x.value !== initial[x.id]).map(x => [x.id, x.value])) }); };
   fields.forEach(x => x.addEventListener('input', persist));
-  let lastFocus = $('#qe-stem');
-  sheet.querySelectorAll('textarea').forEach(t => t.addEventListener('focus', () => { lastFocus = t; if (D.active) { const ui = D.ui; stopDictation(); startDictation(ui, t); } }));
-  mountDictation($('#qe-dict'), () => lastFocus, 'en-US');
+  fields.forEach(x => attachMic(x, ['qe-note', 'qe-why'].includes(x.id) ? 'ar-EG' : 'en-US'));
   $('#qe-cancel').onclick = async () => {
     if (dirty() && !confirm('إلغاء كل التعديلات اللي عملتها هنا؟ السؤال هيفضل زي ما هو.')) return;
     decided = true; await Drafts.clear(q.qid, 'quick_edit'); Resume.save({ sheet: null }); close(true);
@@ -1306,7 +1374,8 @@ function openQuickEdit() {
   };
   $('#qe-save').onclick = async () => {
     const g = id => $('#' + id).value, norm = s => (s || '').trim(), err = $('#qe-err');
-    const why = norm(g('qe-why')); if (!why) { err.textContent = 'اكتب سبب التعديل.'; $('#qe-why').focus(); return; }
+    const why = norm(g('qe-why'));
+    if (why.replace(/[\s\p{P}]/gu, '').length < 4 || why.split(/\s+/).length < 2) { err.textContent = 'اكتب سبب واضح للتعديل (كلمتين على الأقل)، عشان باقي الفريق وClaude يفهموا اتعدّل ليه.'; $('#qe-why').focus(); return; }
     const ch = {};
     if (norm(g('qe-stem')) !== norm(v.stem)) ch.stem = norm(g('qe-stem'));
     if (norm(g('qe-main')) !== norm(v.explanation_main)) ch.explanation_main = norm(g('qe-main')) || null;
@@ -1326,8 +1395,52 @@ function openQuickEdit() {
     try {
       await rpc('quick_edit', { p_qid: q.qid, p_changes: ch, p_note: why });
       decided = true; await Drafts.clear(q.qid, 'quick_edit'); Resume.save({ sheet: null }); close(true);
-      notify(`تم حفظ التعديل السريع للسؤال رقم ${q.qid_display} بفضل الله`, 'السؤال في فولدر "تنتظرك" لحد ما يتعتمد.'); await refreshCurrent();
+      notify(`تم حفظ التعديل السريع للسؤال رقم ${q.qid_display} بفضل الله`, 'تلاقيه في فولدر "عُدّلت سريعًا" لحد ما يتعتمد.'); await refreshCurrent();
     } catch (e) { btn.disabled = false; err.textContent = errText(e) + ' — تعديلاتك محفوظة، جرّب تاني.'; }
+  };
+}
+
+/* ---------- two ways back: previous state / original question ---------- */
+function openUndo() {
+  const b = S.bundle, q = b.question, u = b.undo || {};
+  const PREV = {
+    cancel_request: ['إلغاء طلب التعديل المفتوح', 'الطلب بيتلغي قبل ما Claude ينفذه، والسؤال يرجع لحالته قبل الطلب.'],
+    undo_approval: ['إلغاء الاعتماد', 'السؤال يرجع لفولدر "تنتظرك". لو كان له اعتماد أقدم، الطلاب يرجعوا يشوفوه؛ وإلا يختفي من تطبيق الطلاب لحد ما يتعتمد تاني.'],
+    undo_quick_edit: ['إلغاء آخر تعديل سريع', 'النص يرجع زي ما كان قبل التعديل السريع بالظبط.'],
+    undo_claude_revision: ['رفض تعديل Claude الأخير', 'السؤال يرجع للنسخة اللي طلبت عليها التعديل، والطلب يتسجل إنه اترفض. تقدر تطلب تعديل جديد بعدها.'],
+  };
+  const p = u.previous && PREV[u.previous];
+  const approvedNote = q.status === 'approved' ? ' الطلاب هيفضلوا يشوفوا النسخة المعتمدة لحد ما تعتمده تاني.' : '';
+  const card = (mode, icon, title, sub, what) => `<button type="button" class="ucard" data-mode="${mode}" aria-pressed="false">
+      <span class="uic">${icon}</span><span class="utx"><b>${title}</b><span class="uwhat">${what}</span><span class="usub">${sub}</span></span></button>`;
+  const { sheet, close } = openSheet(`
+    <div class="sheet-head"><h2>↩️ رجوع في السؤال ${esc(q.qid_display)}</h2>
+    <p class="hint" style="margin-top:4px">اختار نوع الرجوع. كل حاجة بتفضل محفوظة في سجل السؤال، فمفيش حاجة بتضيع.</p></div>
+    <div class="ucards">
+      ${p ? card('previous', '↩️', 'العودة للوضع السابق', p[1], p[0]) : ''}
+      ${u.original ? card('original', '⟲', 'العودة للسؤال بدون أي تعديلات', `يرجع لنسخة Claude الأصلية اللي دخلت المراجعة (النسخة ${esc(u.baseline_version_no || '')})، ويلغي طلبك المفتوح لو فيه.${approvedNote}`, 'كل التعديلات تتلغي') : ''}
+    </div>
+    <div class="err" id="u-err" role="alert"></div>
+    <div class="foot"><button class="btn ok" id="u-go" disabled>✓ تأكيد الرجوع</button><button class="btn" id="u-cancel" type="button">إغلاق</button></div>`);
+  let mode = null;
+  const go = sheet.querySelector('#u-go');
+  sheet.querySelectorAll('.ucard').forEach(c => c.onclick = () => {
+    mode = c.dataset.mode; sheet.querySelectorAll('.ucard').forEach(x => x.setAttribute('aria-pressed', x === c));
+    go.disabled = false; go.textContent = mode === 'previous' ? '✓ تأكيد العودة للوضع السابق' : '✓ تأكيد العودة للسؤال الأصلي';
+  });
+  const only = sheet.querySelectorAll('.ucard'); if (only.length === 1) only[0].click();
+  sheet.querySelector('#u-cancel').onclick = () => close();
+  go.onclick = async () => {
+    if (!mode) return;
+    go.disabled = true;
+    try {
+      const st = await rpc('revert_question', { p_qid: q.qid, p_mode: mode });
+      if (u.previous === 'cancel_request' || mode === 'original') Drafts.clear(q.qid, 'edit_request');
+      close(true);
+      notify(mode === 'previous' ? `تم الرجوع للوضع السابق للسؤال رقم ${q.qid_display} بفضل الله` : `تم إرجاع السؤال رقم ${q.qid_display} لنسخته الأصلية بفضل الله`,
+             `حالته دلوقتي: ${STATUS_AR[st] || st}.`);
+      await refreshCurrent();
+    } catch (e) { go.disabled = false; sheet.querySelector('#u-err').textContent = errText(e); }
   };
 }
 

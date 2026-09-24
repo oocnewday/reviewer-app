@@ -1,7 +1,7 @@
 /* OOC reviewer app – service worker.
    Network first for the page itself, so every update you upload reaches reviewers on their next open.
    The cached copy is used only when there is no connection. Supabase (data, login, voice notes) is never cached. */
-const VERSION = 'ooc-review-v4';
+const VERSION = 'ooc-review-v6';
 const SHELL = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
