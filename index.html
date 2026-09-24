@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#22348C">
+<title>مراجعة بنك الأسئلة – OOC</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%2322348C'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%23E4EE6A'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%2316203A'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#16203A; --ink-2:#4A5570; --ink-3:#7D879E;
+  --paper:#F3F5F9; --surface:#FFFFFF; --line:#D8DEEA; --line-2:#E8ECF3;
+  --cobalt:#22348C; --cobalt-2:#E7EAF7;
+  --stain:#E4EE6A; --stain-ink:#2F3300;
+  --ok:#1D7A52; --ok-2:#E3F2EA;
+  --warn:#AE3F28; --warn-2:#F8E7E2;
+  --amber:#8A5E00; --amber-2:#FBF1D9;
+  --radius:14px; --radius-s:8px;
+  --ui:"IBM Plex Sans Arabic", "Segoe UI", Tahoma, system-ui, sans-serif;
+  --read:"Source Serif 4", Georgia, "Times New Roman", serif;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ink:#E6EAF4; --ink-2:#B3BCD2; --ink-3:#8791AA;
+    --paper:#0E1426; --surface:#161E35; --line:#2A3553; --line-2:#212B46;
+    --cobalt:#8FA2F2; --cobalt-2:#1E2A55;
+    --stain:#5B6214; --stain-ink:#F4F8C8;
+    --ok:#5CC896; --ok-2:#12352A;
+    --warn:#F08F77; --warn-2:#3C1D17;
+    --amber:#E6BD5C; --amber-2:#3A2E10;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink)}
+body{font-family:var(--ui);font-size:16px;line-height:1.6;-webkit-text-size-adjust:100%}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--cobalt)}
+:focus-visible{outline:3px solid var(--cobalt);outline-offset:2px;border-radius:6px}
+.wrap{max-width:720px;margin:0 auto;padding:16px 16px 140px}
+.muted{color:var(--ink-3)}
+.small{font-size:.875rem}
+.hidden{display:none!important}
+
+/* top bar */
+.bar{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top)}
+.bar-in{max-width:720px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:12px}
+.brand{font-weight:700;letter-spacing:.2px}
+.bar .grow{flex:1}
+.count{font-weight:600;color:var(--cobalt);white-space:nowrap}
+.linkbtn{background:none;border:0;padding:6px 4px;color:var(--cobalt);cursor:pointer;font-weight:500}
+.linkbtn.quiet{color:var(--ink-2);font-weight:400}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:12px;border:1px solid var(--line);background:var(--surface);padding:10px 16px;cursor:pointer;font-weight:600;min-height:44px}
+.btn.primary{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+@media (prefers-color-scheme:dark){.btn.primary{color:#0E1426}}
+.btn.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+@media (prefers-color-scheme:dark){.btn.ok{color:#0E1426}}
+.btn.block{width:100%}
+a.btn{text-decoration:none}
+.btn:disabled{opacity:.55;cursor:default}
+
+/* forms */
+label.f{display:block;margin:14px 0 6px;font-weight:600}
+input.t,select.t,textarea.t{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 12px;min-height:44px}
+textarea.t{min-height:88px;resize:vertical;line-height:1.55}
+textarea.t.en{font-family:var(--read);direction:ltr;text-align:left}
+.hint{font-size:.85rem;color:var(--ink-3);margin-top:4px}
+.err{color:var(--warn);margin-top:10px}
+
+/* auth */
+.auth{max-width:420px;margin:8vh auto 0;padding:0 18px}
+.auth h1{font-size:1.9rem;line-height:1.25;margin:0 0 6px}
+.auth p.lead{color:var(--ink-2);margin:0 0 18px}
+.tabs{display:flex;gap:4px;background:var(--line-2);padding:4px;border-radius:12px;margin-bottom:6px}
+.tabs button{flex:1;border:0;background:none;padding:8px;border-radius:9px;cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--surface);font-weight:600}
+
+/* owner card */
+.owner{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:18px}
+.owner h2{font-size:1rem;margin:0 0 8px}
+.owner .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 0;border-top:1px solid var(--line-2)}
+.owner .row:first-of-type{border-top:0}
+.owner .row .grow{flex:1;min-width:180px}
+.stat{font-weight:700;font-size:1.15rem}
+
+/* queue */
+.qhead{display:flex;align-items:baseline;justify-content:space-between;margin:6px 0 10px}
+.qhead h2{margin:0;font-size:1.35rem}
+.qlist{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.qlist li+li{border-top:1px solid var(--line-2)}
+.qlist a{display:flex;gap:12px;align-items:center;padding:12px 14px;text-decoration:none;color:inherit}
+.qlist a:hover{background:var(--cobalt-2)}
+.qid{font-variant-numeric:tabular-nums;font-weight:700;min-width:4.2em}
+.qmeta{flex:1;min-width:0}
+.qmeta .code{direction:ltr;text-align:right;font-size:.85rem;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.tag{font-size:.78rem;padding:1px 8px;border-radius:999px;background:var(--line-2);color:var(--ink-2);white-space:nowrap}
+.tag.warn{background:var(--warn-2);color:var(--warn)}
+.tag.amber{background:var(--amber-2);color:var(--amber)}
+.tag.cobalt{background:var(--cobalt-2);color:var(--cobalt)}
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:var(--radius);padding:28px 18px;text-align:center}
+
+/* question screen */
+.facts{display:flex;flex-wrap:wrap;gap:6px 16px;color:var(--ink-2);font-size:.9rem;margin:2px 0 14px}
+.facts b{color:var(--ink);font-weight:600}
+
+.verdict{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.verdict .side{padding:12px 14px;text-align:center}
+.verdict .side+.side{border-inline-start:1px solid var(--line)}
+.verdict .who{font-size:.85rem;color:var(--ink-2)}
+.verdict .letter{font-family:var(--read);font-size:2.6rem;line-height:1.1;font-weight:600;direction:ltr}
+.verdict .note{font-size:.8rem;color:var(--ink-3);direction:ltr}
+.verdict-foot{border:1px solid var(--line);border-top:0;border-radius:0 0 var(--radius) var(--radius);margin-top:-1px;padding:10px 14px;background:var(--surface)}
+.verdict.has-foot{border-radius:var(--radius) var(--radius) 0 0}
+.badge{display:inline-block;font-weight:700;font-size:.85rem;padding:2px 10px;border-radius:999px}
+.badge.agree{background:var(--ok-2);color:var(--ok)}
+.badge.disagree{background:var(--warn-2);color:var(--warn)}
+.badge.na{background:var(--line-2);color:var(--ink-2)}
+.reason{margin-top:8px;white-space:pre-wrap}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-top:14px}
+.panel h3{margin:0 0 6px;font-size:.95rem}
+.panel.warn{border-color:var(--warn);background:var(--warn-2)}
+.panel.round2{border-color:var(--cobalt)}
+.panel.hand{border-style:dashed}
+.pre{white-space:pre-wrap}
+
+.content{direction:ltr;text-align:left;font-family:var(--read);font-size:1.06rem;line-height:1.7}
+.content .stem{font-size:1.14rem;font-weight:600;margin:18px 0 8px}
+.expl{border-left:3px solid var(--line);padding:2px 0 2px 12px;margin:6px 0 4px;color:var(--ink)}
+.expl.extra{border-left-color:var(--cobalt)}
+.expl .lbl{display:block;font-family:var(--ui);font-size:.78rem;color:var(--ink-3);direction:rtl;text-align:right}
+.opts{list-style:none;margin:14px 0 0;padding:0}
+.opt{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:10px;background:var(--surface)}
+.opt.correct{border-color:var(--ok);box-shadow:inset 3px 0 0 var(--ok)}
+.opt .head{display:flex;gap:10px;align-items:baseline}
+.opt .key{font-weight:700;min-width:1.4em}
+.opt .otext{flex:1;font-weight:600}
+.opt .mark{font-family:var(--ui);font-size:.8rem;font-weight:700;color:var(--ok);white-space:nowrap}
+.ref{margin-top:14px;font-size:.95rem;color:var(--ink-2)}
+.ref .refv{display:block;direction:ltr;text-align:left;font-family:var(--read);color:var(--ink)}
+
+mark.ins{background:var(--stain);color:var(--stain-ink);border-radius:3px;padding:0 1px}
+del.rem{color:var(--ink-3);text-decoration-thickness:2px;margin-right:.25em}
+
+details.hist{margin-top:14px}
+details.hist summary{cursor:pointer;color:var(--cobalt);font-weight:600;padding:6px 0}
+.hitem{border-top:1px solid var(--line-2);padding:10px 0}
+.hitem:first-child{border-top:0}
+
+/* sticky actions */
+.actions{position:fixed;inset-inline:0;bottom:0;z-index:6;background:var(--paper);border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
+.actions-in{max-width:720px;margin:0 auto}
+.actions .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.actions .btn{min-height:56px;font-size:1.05rem}
+.approve-note{margin-bottom:8px}
+
+/* sheet */
+.scrim{position:fixed;inset:0;background:rgba(10,15,30,.45);z-index:20;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);width:100%;max-width:720px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+@media (min-width:760px){.scrim{align-items:center}.sheet{border-radius:18px}}
+.sheet h2{margin:0 0 4px;font-size:1.2rem}
+.sheet .foot{display:flex;gap:10px;margin-top:18px}
+.sheet .foot .btn{flex:1}
+
+.rec{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px}
+.rec .dot{width:10px;height:10px;border-radius:50%;background:var(--warn);animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.rec .dot{animation:none}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:none;padding:6px 10px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--cobalt-2);color:var(--cobalt);font-weight:600}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:12px;z-index:30;max-width:90vw}
+.loading{padding:40px 0;text-align:center;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">جاري التحميل…</div></div>
+<noscript>هذا الموقع يحتاج تفعيل JavaScript.</noscript>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+/* OOC Question Bank – Reviewer app (phase 3a). Talks to Supabase directly; RLS + RPCs enforce access. */
+const SUPABASE_URL = 'https://djqsffknczddefukbuzu.supabase.co';
+// Public (anon) key: safe to ship in a web page; every table is protected by RLS.
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcXNmZmtuY3pkZGVmdWtidXp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxOTE0NDUsImV4cCI6MjEwNTc2NzQ0NX0.-4r_Mp6GKRLLoqotKPEDmFglsZOnyHrRpuo5j3klIcE';
+const DOC_URL = 'https://claude.ai/code/artifact/aa2a7b7c-a88d-41f2-b4d9-7e79ff8c5b67';
+const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل معزول. اقرأ 'معايير الشرح' و'أدوات محادثة الحل'، ثم استخدم next_unsolved وحل بـ save_solution، وللمختلف فقط reveal_source ثم set_disagreement_reason.`;
+const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
+const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
+const MAX_REC_SECONDS = 600;
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+const S = { session: null, profile: null, isAdmin: false, queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, editing: false, recovery: false };
+const $app = document.getElementById('app');
+
+/* ---------- helpers ---------- */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const nl = s => esc(s).replace(/\n/g, '<br>');
+function toast(msg, ms = 2600) {
+  const t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), ms);
+}
+function errText(e) {
+  const m = (e && (e.message || e.error_description || e.msg)) || String(e);
+  if (/Not allowed/i.test(m)) return 'ليست لديك صلاحية على هذا السؤال.';
+  if (/Invalid login credentials/i.test(m)) return 'البريد أو كلمة السر غير صحيحة.';
+  if (/Email not confirmed/i.test(m)) return 'البريد لم يُؤكَّد بعد. افتح رسالة التأكيد في بريدك ثم سجّل الدخول.';
+  if (/User already registered/i.test(m)) return 'هذا البريد مسجّل بالفعل. استخدم تسجيل الدخول.';
+  if (/Password should be/i.test(m)) return 'كلمة السر قصيرة: 6 أحرف على الأقل.';
+  if (/revision request needs/i.test(m)) return 'طلب التعديل يحتاج نوعًا أو تعليقًا أو فويس.';
+  if (/Failed to fetch|NetworkError/i.test(m)) return 'لا يوجد اتصال بالإنترنت. تأكد من الاتصال وحاول مرة أخرى.';
+  return m;
+}
+async function rpc(fn, args) {
+  const { data, error } = await sb.rpc(fn, args || {});
+  if (error) throw error;
+  return data;
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  toast('نُسخت الرسالة. الصقها في محادثة Claude جديدة.');
+}
+const seenKey = (n, kind) => `notice:${S.session?.user?.id}:${n.id}:${kind}`;
+const seen = (n, kind) => { try { return localStorage.getItem(seenKey(n, kind)) === '1'; } catch { return false; } };
+const markSeen = (n, kind) => { try { localStorage.setItem(seenKey(n, kind), '1'); } catch { } };
+const CONF = { high: 'عالية', medium: 'متوسطة', low: 'منخفضة' };
+const STATUS_AR = { extracted: 'مستخرج', solved: 'محلول', in_review: 'في المراجعة', needs_revision: 'ينتظر التعديل', revised: 'معدّل', approved: 'معتمد', archived: 'مؤرشف' };
+const DECISION_AR = { approve: 'اعتمد', needs_revision: 'طلب تعديلًا', comment: 'علّق' };
+
+/* ---------- word diff (round 2 highlighting) ---------- */
+function diffHTML(oldS, newS) {
+  oldS = oldS || ''; newS = newS || '';
+  if (oldS === newS) return nl(newS);
+  const a = oldS.split(/(\s+)/), b = newS.split(/(\s+)/);
+  const n = a.length, m = b.length;
+  if (n * m > 600000) return `<mark class="ins">${nl(newS)}</mark>`;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  const push = (t, s) => { const last = out[out.length - 1]; if (last && last.t === t) last.s += s; else out.push({ t, s }); };
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { push('=', b[j]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { push('-', a[i]); i++; }
+    else { push('+', b[j]); j++; }
+  }
+  while (i < n) push('-', a[i++]);
+  while (j < m) push('+', b[j++]);
+  return out.map(p => p.t === '=' ? nl(p.s) : p.t === '+' ? (p.s.trim() ? `<mark class="ins">${nl(p.s)}</mark>` : nl(p.s)) : (p.s.trim() ? `<del class="rem">${nl(p.s)}</del>` : '')).join('');
+}
+
+/* ---------- auth ---------- */
+function renderAuth(mode = 'in', msg = '') {
+  const tabs = mode === 'in' || mode === 'up';
+  $app.innerHTML = `
+  <main class="auth">
+    <h1>مراجعة بنك الأسئلة</h1>
+    <p class="lead">بوابة استشاريي OOC medical dep. لمراجعة أسئلة سكند الزمالة.</p>
+    ${tabs ? `<div class="tabs" role="tablist">
+      <button role="tab" aria-selected="${mode === 'in'}" data-mode="in">تسجيل الدخول</button>
+      <button role="tab" aria-selected="${mode === 'up'}" data-mode="up">حساب جديد</button></div>` : ''}
+    <form id="authf" novalidate>
+      ${mode === 'up' ? `<label class="f" for="name">الاسم كما يظهر للفريق</label><input class="t" id="name" autocomplete="name" required>` : ''}
+      ${mode !== 'reset' ? `<label class="f" for="email">البريد الإلكتروني</label><input class="t" id="email" type="email" dir="ltr" autocomplete="email" required>` : ''}
+      ${mode !== 'forgot' ? `<label class="f" for="pass">${mode === 'reset' ? 'كلمة السر الجديدة' : 'كلمة السر'}</label><input class="t" id="pass" type="password" dir="ltr" autocomplete="${mode === 'in' ? 'current-password' : 'new-password'}" required minlength="6">` : ''}
+      <div class="err" id="aerr" role="alert">${esc(msg)}</div>
+      <button class="btn primary block" style="margin-top:14px" type="submit">${{ in: 'ادخل', up: 'أنشئ الحساب', forgot: 'أرسل رابط تغيير كلمة السر', reset: 'احفظ كلمة السر' }[mode]}</button>
+    </form>
+    ${mode === 'in' ? `<p><button class="linkbtn quiet" data-mode="forgot">نسيت كلمة السر؟</button></p>` : ''}
+    ${mode === 'forgot' ? `<p><button class="linkbtn quiet" data-mode="in">رجوع لتسجيل الدخول</button></p>` : ''}
+  </main>`;
+  $app.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => renderAuth(b.dataset.mode));
+  document.getElementById('authf').onsubmit = async ev => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('button[type=submit]'); btn.disabled = true;
+    const v = id => (document.getElementById(id)?.value || '').trim();
+    const err = t => { document.getElementById('aerr').textContent = t; btn.disabled = false; };
+    try {
+      if (mode === 'in') {
+        const { error } = await sb.auth.signInWithPassword({ email: v('email'), password: document.getElementById('pass').value });
+        if (error) throw error;
+      } else if (mode === 'up') {
+        if (!v('name')) return err('اكتب اسمك.');
+        const { data, error } = await sb.auth.signUp({ email: v('email'), password: document.getElementById('pass').value,
+          options: { data: { display_name: v('name') }, emailRedirectTo: location.origin + location.pathname } });
+        if (error) throw error;
+        if (!data.session) return renderAuth('in', 'أُرسلت رسالة تأكيد إلى بريدك. افتحها ثم سجّل الدخول.');
+      } else if (mode === 'forgot') {
+        const { error } = await sb.auth.resetPasswordForEmail(v('email'), { redirectTo: location.origin + location.pathname });
+        if (error) throw error;
+        return renderAuth('in', 'أُرسل رابط تغيير كلمة السر إلى بريدك.');
+      } else if (mode === 'reset') {
+        const { error } = await sb.auth.updateUser({ password: document.getElementById('pass').value });
+        if (error) throw error;
+        S.recovery = false; toast('حُفظت كلمة السر الجديدة.');
+        const { data: { session } } = await sb.auth.getSession(); await onSession(session);
+      }
+    } catch (e) { err(errText(e)); }
+  };
+}
+
+function renderPending() {
+  $app.innerHTML = `
+  <main class="auth">
+    <h1>في انتظار تفعيل الأدمن</h1>
+    <p class="lead">حسابك (${esc(S.session.user.email)}) مسجّل. سيفعّله الأدمن ويحدد الأسئلة التي تراجعها، ثم تظهر لك هنا.</p>
+    <button class="btn primary block" id="recheck">تحقق مرة أخرى</button>
+    <p><button class="linkbtn quiet" id="out">خروج</button></p>
+  </main>`;
+  document.getElementById('recheck').onclick = () => onSession(S.session);
+  document.getElementById('out').onclick = signOut;
+}
+async function signOut() { stopSolverTimer(); await sb.auth.signOut(); S.session = null; location.hash = ''; renderAuth('in'); }
+
+async function onSession(session) {
+  S.session = session;
+  if (S.recovery) return renderAuth('reset');
+  if (!session) return renderAuth('in');
+  $app.innerHTML = '<div class="loading">جاري التحميل…</div>';
+  const { data: prof, error } = await sb.from('profiles').select('*').eq('user_id', session.user.id).maybeSingle();
+  if (error) { $app.innerHTML = `<div class="loading">${esc(errText(error))}</div>`; return; }
+  S.profile = prof;
+  if (!prof || !prof.is_active) return renderPending();
+  S.isAdmin = ['owner', 'admin'].includes(prof.role);
+  await route();
+}
+
+/* ---------- data ---------- */
+async function loadQueue() {
+  const tasks = [rpc('reviewer_queue', { p_limit: 1000 }), rpc('reviewer_notices')];
+  if (S.isAdmin) tasks.push(rpc('pipeline_status').catch(() => null));
+  const [q, n, p] = await Promise.all(tasks);
+  S.queue = q || []; S.notices = n || []; S.pipeline = p || null;
+}
+
+async function route() {
+  const m = location.hash.match(/^#q\/(\d+)/);
+  try {
+    if (m) await openQuestion(Number(m[1]));
+    else { await loadQueue(); renderQueue(); }
+  } catch (e) { $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" onclick="location.hash='';route()">رجوع للقائمة</button></p></div></div>`; }
+}
+window.addEventListener('hashchange', () => { if (S.session && S.profile?.is_active) route(); });
+
+/* ---------- top bar ---------- */
+function topBar(inner) {
+  return `<header class="bar"><div class="bar-in">${inner}</div></header>`;
+}
+const remaining = () => `فاضلك ${S.queue.length} سؤال`;
+
+/* ---------- queue ---------- */
+function reasonTags(r) {
+  const t = [];
+  if (r.match_status === 'disagree') t.push('<span class="tag warn">مختلف مع المصدر</span>');
+  if (r.ai_confidence) t.push(`<span class="tag ${r.ai_confidence === 'low' ? 'amber' : ''}">ثقة ${CONF[r.ai_confidence] || r.ai_confidence}</span>`);
+  if (r.is_incomplete) t.push('<span class="tag amber">ناقص في المصدر</span>');
+  if (r.status === 'revised') t.push(`<span class="tag cobalt">معدّل – جولة ${(r.rounds || 1) + 1}</span>`);
+  return t.join('');
+}
+function ownerCard() {
+  const p = S.pipeline; if (!S.isAdmin || !p) return '';
+  const st = p.by_status || {};
+  const chats = Math.ceil((p.unsolved || 0) / 35);
+  return `<section class="owner" aria-labelledby="own-h">
+    <h2 id="own-h">لوحة المالك</h2>
+    <div class="row"><div class="grow">
+      <div class="stat">${p.unsolved || 0} ${p.unsolved_incomplete ? `<span class="small muted">+ ${p.unsolved_incomplete} ناقص</span>` : ''}</div>
+      <div class="small muted">سؤال ينتظر الحل${p.unsolved ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'}، 30–40 سؤالًا لكل محادثة)` : '. تظهر هنا بعد الاستخراج.'}</div>
+    </div>${p.unsolved || p.awaiting_reason ? `<button class="btn primary" data-copy="solve">انسخ رسالة محادثة الحل</button><a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">افتح Claude</a>` : ''}</div>
+    ${p.awaiting_reason ? `<div class="row"><div class="grow small">${p.awaiting_reason} سؤال محلول ومختلف مع المصدر ينتظر كتابة سبب الاختلاف (نفس رسالة الحل).</div></div>` : ''}
+    <div class="row"><div class="grow">
+      <div class="stat">${p.open_requests || 0}</div>
+      <div class="small muted">طلب تعديل مفتوح${p.consistency_checks ? `، و${p.consistency_checks} سؤال عُدّل سريعًا يحتاج مراجعة اتساق` : ''}</div>
+    </div>${p.open_requests || p.consistency_checks ? `<button class="btn primary" data-copy="revise">انسخ رسالة محادثة التعديلات</button>` : ''}</div>
+    <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div>
+    <div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>
+  </section>`;
+}
+function renderQueue() {
+  S.bundle = null; S.qid = null;
+  const items = S.queue.map(r => `<li><a href="#q/${r.qid}">
+      <span class="qid">${esc(r.qid_display)}</span>
+      <span class="qmeta"><span>${esc(r.chapter || '')}</span><div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r)}</div></span>
+    </a></li>`).join('');
+  $app.innerHTML = topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span><span class="small muted">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`) + `
+  <main class="wrap">
+    ${ownerCard()}
+    <div class="qhead"><h2>أسئلة تنتظر مراجعتك</h2><span class="count">${remaining()}</span></div>
+    ${S.queue.length ? `<p class="small muted" style="margin-top:0">المختلف مع المصدر أولًا، ثم الأقل ثقة، ثم الناقص، ثم المعدّل.</p><ul class="qlist">${items}</ul>
+      <p style="margin-top:16px"><a class="btn primary block" href="#q/${S.queue[0].qid}">ابدأ من أول سؤال</a></p>`
+      : `<div class="empty"><p>لا توجد أسئلة تنتظر مراجعتك الآن.</p><button class="btn" id="refresh">تحديث</button></div>`}
+  </main>`;
+  document.getElementById('out').onclick = signOut;
+  const r = document.getElementById('refresh'); if (r) r.onclick = route;
+  $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText(b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE));
+  if (S.isAdmin && S.pipeline) loadSolver();
+}
+
+/* ---------- paid API solver (owner card) ---------- */
+const PHASE_AR = {
+  solve: 'Anthropic يحل الأسئلة الآن كدفعة (Batch): عادةً أقل من ساعة، وقد تصل إلى 24 ساعة. النتائج تُحفظ في القاعدة عند فتح هذه الصفحة.',
+  second: 'رأي ثانٍ مستقل للأسئلة المختلفة مع المصدر (دفعة جديدة).',
+  reason: 'كتابة سبب الاختلاف للأسئلة المختلفة مع المصدر (دفعة أخيرة).',
+};
+const usd = n => '\u2066$' + (Number(n) || 0).toFixed(2) + '\u2069'; // isolate so "$0.10" never flips inside Arabic text
+async function solverCall(action, extra = {}) {
+  const { data, error } = await sb.functions.invoke('solver', { body: { action, ...extra } });
+  if (error) {
+    let d = null; try { d = await error.context.json(); } catch { }
+    const e = new Error(d?.error || error.message); e.detail = d; throw e;
+  }
+  return data;
+}
+function solverErr(e) {
+  const d = e.detail || {}, c = d.error || e.message;
+  if (c === 'no_key') return 'لا يوجد مفتاح API بعد.';
+  if (c === 'run_active') return 'توجد تشغيلة جارية بالفعل.';
+  if (c === 'trial_waiting_approval') return 'التجربة انتهت وتنتظر قرارك قبل أي تشغيلة جديدة.';
+  if (c === 'nothing_to_solve') return 'لا توجد أسئلة تنتظر الحل.';
+  if (c === 'no_trial_yet') return 'لم تنجح أي تجربة بعد.';
+  if (c === 'over_budget') return `التكلفة المتوقعة ${usd(d.estimate)} أعلى من الحد الأقصى للتشغيلة ${usd(d.cap)}. قلّل عدد الأسئلة.`;
+  if (c === 'anthropic_error') {
+    if (d.status === 401) return 'مفتاح API غير صحيح. أنشئ مفتاحًا جديدًا وضعه مكان القديم في Supabase.';
+    if (/credit balance/i.test(d.detail || '')) return 'رصيد حساب Anthropic غير كافٍ. اشحن الرصيد ثم حاول مرة أخرى.';
+    return `رد Anthropic بخطأ (${d.status}): ${String(d.detail || '').slice(0, 160)}`;
+  }
+  if (c === 'admins_only') return 'للمالك والأدمن فقط.';
+  return errText(e);
+}
+function solverSummary(r) {
+  const c = r.counts || {}, n = (c.agree || 0) + (c.disagree || 0) + (c.not_applicable || 0);
+  return `حُل ${n} من ${r.requested}: اتفاق ${c.agree || 0}، اختلاف ${c.disagree || 0}` +
+    (c.second_differs ? ` (${c.second_differs} اختلف فيها الرأي الثاني، فثقتها منخفضة)` : '') +
+    (c.error ? `، تعذّر ${c.error} (تبقى للتشغيلة القادمة)` : '') +
+    `. التكلفة الفعلية ${usd(r.cost_usd)}${n ? ` (${usd(r.cost_usd / n)} للسؤال)` : ''}.`;
+}
+let solverTimer = null;
+function stopSolverTimer() { if (solverTimer) { clearInterval(solverTimer); solverTimer = null; } }
+async function loadSolver(pollFirst = true) {
+  const box = document.getElementById('solver-box'); if (!box) return;
+  try {
+    let st = await solverCall('status');
+    if (st.active && pollFirst) { await solverCall('poll', { run_id: st.active.id }).catch(() => null); st = await solverCall('status'); }
+    renderSolver(st);
+  } catch (e) { box.innerHTML = `<div class="grow small"><b>المحلّل الآلي:</b> تعذّر الوصول إليه. ${esc(solverErr(e))}</div><button class="btn" id="sv-retry">حاول مرة أخرى</button>`; document.getElementById('sv-retry').onclick = () => loadSolver(); }
+}
+function renderSolver(st) {
+  const box = document.getElementById('solver-box'); if (!box) return;
+  stopSolverTimer();
+  const head = `<b>المحلّل الآلي (مدفوع)</b> <span class="small muted" dir="ltr">${esc(st.model || '')} · ${esc(st.effort || '')}</span>`;
+  const last = (st.runs || []).find(r => !['solve', 'second', 'reason'].includes(r.status));
+  let html = '';
+  if (!st.configured) {
+    html = `<div class="grow">${head}<div class="small">غير مفعّل – يحتاج مفتاح API. لا تُصرف أي تكلفة قبل ذلك.</div>
+      <details class="small" style="margin-top:6px"><summary style="cursor:pointer;color:var(--cobalt)">كيف أفعّله؟</summary><ol style="margin:6px 0;padding-inline-start:20px">
+        <li>من <a href="https://platform.claude.com" target="_blank" rel="noopener">platform.claude.com</a>: اشحن رصيدًا صغيرًا (مثلًا 5 دولار) وضع حد صرف شهري.</li>
+        <li>API Keys ← Create Key، وانسخ المفتاح (يظهر مرة واحدة).</li>
+        <li>لوحة Supabase ← مشروع OOC Question Bank ← Edge Functions ← Secrets: أضف الاسم <code dir="ltr">ANTHROPIC_API_KEY</code> والقيمة هي المفتاح.</li>
+        <li>ارجع هنا واضغط "تحقق".</li></ol></details></div>
+      <button class="btn" disabled>حل الدفعة</button><button class="btn" id="sv-check">تحقق</button>`;
+  } else if (st.active) {
+    const r = st.active, c = r.counts || {};
+    html = `<div class="grow">${head}<div class="small">${r.mode === 'trial' ? 'التجربة' : 'تشغيلة'} رقم ${r.id} (${r.requested} سؤال). ${esc(PHASE_AR[r.status] || '')}</div>
+      <div class="small muted">التكلفة حتى الآن ${usd(r.cost_usd)} من حد ${usd(r.max_cost_usd)}${c.in_review || c.done_disagree ? `، وصل للمراجعة ${(c.in_review || 0) + (c.done_disagree || 0)}` : ''}.</div></div>
+      <button class="btn" id="sv-poll">تحقق الآن</button><button class="btn" id="sv-stop">أوقف</button>`;
+    solverTimer = setInterval(() => loadSolver(), 60000);
+  } else if (!st.trial_approved && !st.trial_done) {
+    const n = Math.min(st.trial_size || 10, st.unsolved || 0);
+    html = `<div class="grow">${head}<div class="small">أول تشغيل إجباري: تجربة على ${st.trial_size || 10} أسئلة${n ? `، تكلفتها المتوقعة حوالي ${usd(n * st.est_per_q)}` : ''}. بعدها ترى التكلفة الفعلية وتقرر.</div>
+      ${st.unsolved ? '' : '<div class="small muted">لا توجد أسئلة تنتظر الحل الآن؛ التجربة تبدأ بعد استخراج الدفعة الجاية.</div>'}
+      ${last ? `<div class="small muted">آخر محاولة: ${esc(solverSummary(last))}</div>` : ''}</div>
+      <button class="btn primary" id="sv-start" ${st.unsolved ? '' : 'disabled'}>ابدأ التجربة</button>`;
+  } else if (!st.trial_approved) {
+    const trial = (st.runs || []).find(r => r.mode === 'trial' && r.status === 'done') || last;
+    html = `<div class="grow">${head}<div class="small">${trial ? esc(solverSummary(trial)) : ''}</div>
+      <div class="small">باقي الأسئلة (${st.unsolved}) تكلفتها المتوقعة حوالي ${usd(st.unsolved * st.est_per_q)}.</div>
+      <div class="small muted">راجع شرح أسئلة التجربة في القائمة أولًا. الحد الأقصى لكل تشغيلة ${usd(st.max_cost_usd)}.</div></div>
+      <button class="btn primary" id="sv-approve">افتح الدفعات الكاملة</button>`;
+  } else {
+    const def = Math.min(st.unsolved || 0, st.max_run_size || 100, Math.max(1, Math.floor((st.max_cost_usd || 5) / (st.est_per_q || 0.12))));
+    html = `<div class="grow">${head}<div class="small">${st.unsolved} سؤال ينتظر الحل. التكلفة المتوقعة للسؤال ${usd(st.est_per_q)}، والحد الأقصى للتشغيلة ${usd(st.max_cost_usd)}.</div>
+      ${last ? `<div class="small muted">آخر تشغيلة: ${esc(solverSummary(last))}</div>` : ''}
+      <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:6px">عدد الأسئلة <input class="t" id="sv-size" type="number" min="1" max="${st.max_run_size}" value="${def || 1}" style="width:90px;min-height:36px;padding:4px 8px"> <span id="sv-est" class="muted"></span></label></div>
+      <button class="btn primary" id="sv-start" ${st.unsolved ? '' : 'disabled'}>حل الدفعة</button>`;
+  }
+  box.innerHTML = html + '<div class="err small" id="sv-err" role="alert" style="flex-basis:100%"></div>';
+  const err = t => { const e = document.getElementById('sv-err'); if (e) e.textContent = t; };
+  const busy = (b, on) => { if (b) { b.disabled = on; } };
+  const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = async () => { busy(b, true); err(''); try { await fn(); } catch (e) { err(solverErr(e)); busy(b, false); } }; };
+  const size = document.getElementById('sv-size');
+  if (size) { const upd = () => { const n = Number(size.value) || 0; const est = n * st.est_per_q; document.getElementById('sv-est').textContent = `≈ ${usd(est)}${est > st.max_cost_usd ? ' (أعلى من الحد)' : ''}`; }; size.oninput = upd; upd(); }
+  on('sv-check', () => loadSolver());
+  on('sv-poll', () => loadSolver(true));
+  on('sv-start', async () => {
+    const n = size ? Number(size.value) || 1 : st.trial_size;
+    if (!confirm(st.trial_approved ? `بدء حل ${n} سؤال بتكلفة متوقعة حوالي ${usd(n * st.est_per_q)}؟` : `بدء التجربة على ${Math.min(st.trial_size, st.unsolved)} أسئلة؟`)) { const b = document.getElementById('sv-start'); if (b) b.disabled = false; return; }
+    await solverCall('start', { size: n }); toast('بدأت التشغيلة. تابعها من هنا.'); await loadSolver(false);
+  });
+  on('sv-stop', async () => {
+    if (!confirm('إيقاف التشغيلة؟ ما حُل يبقى محفوظًا، والأسئلة المختلفة تنتقل للمراجعة بسبب مكتوب آليًا.')) { const b = document.getElementById('sv-stop'); if (b) b.disabled = false; return; }
+    await solverCall('stop', { run_id: st.active.id }); toast('أُوقفت التشغيلة.'); await loadQueue(); renderQueue();
+  });
+  on('sv-approve', async () => {
+    if (!confirm('فتح الدفعات الكاملة؟ كل تشغيلة ستظل بضغطة منك وبحد أقصى للتكلفة.')) { const b = document.getElementById('sv-approve'); if (b) b.disabled = false; return; }
+    await solverCall('approve_trial'); toast('فُتحت الدفعات الكاملة.'); await loadSolver(false);
+  });
+  if (st.active === null && (st.runs || [])[0] && S._lastRunStatus && S._lastRunStatus !== st.runs[0].status) { loadQueue().then(renderQueue); }
+  S._lastRunStatus = (st.runs || [])[0]?.status;
+}
+
+/* ---------- notices (backlog 9) ---------- */
+function noticeModal(n) {
+  return new Promise(res => {
+    const sc = document.createElement('div'); sc.className = 'scrim';
+    sc.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="nt"><h2 id="nt">${esc(n.title || 'تنبيه')}</h2><p class="pre">${esc(n.body)}</p><div class="foot"><button class="btn primary">تمام</button></div></div>`;
+    document.body.appendChild(sc); sc.querySelector('button').focus();
+    sc.querySelector('button').onclick = () => { sc.remove(); res(); };
+  });
+}
+async function showBeforeFirst(qid) {
+  for (const n of S.notices.filter(n => n.placement === 'before_first' && (n.qids || []).includes(qid) && !seen(n, 'before'))) {
+    await noticeModal(n); markSeen(n, 'before');
+  }
+}
+async function showAfterLast(qid) {
+  const was = S.notices.filter(n => n.placement === 'after_last' && (n.qids || []).includes(qid));
+  if (!was.length) return;
+  const fresh = await rpc('reviewer_notices').catch(() => []);
+  for (const n of fresh.filter(f => was.some(w => w.id === f.id))) {
+    if (!(n.pending_qids || []).length && !seen(n, 'after')) { await noticeModal(n); markSeen(n, 'after'); }
+  }
+  S.notices = fresh;
+}
+
+/* ---------- question ---------- */
+async function openQuestion(qid) {
+  $app.innerHTML = '<div class="loading">جاري تحميل السؤال…</div>';
+  if (!S.queue.length && !S.notices.length) await loadQueue();
+  const b = await rpc('question_bundle', { p_qid: qid });
+  if (!b) throw new Error('هذا السؤال غير متاح لك.');
+  S.bundle = b; S.qid = qid; S.editing = false; S.showExtra = false;
+  renderQuestion();
+  await showBeforeFirst(qid);
+}
+
+function diffBase(b) {
+  const q = b.question, v = b.current_version;
+  if (q.status === 'revised' && b.last_request && b.last_request.before && b.last_request.before.id !== v.id) return { base: b.last_request.before, kind: 'request' };
+  if (q.status === 'revised' && v.created_by_label === 'reviewer_quick_edit' && b.previous_version) return { base: b.previous_version, kind: 'quick' };
+  return { base: null, kind: null };
+}
+
+function renderQuestion() {
+  stopSolverTimer();
+  const b = S.bundle, q = b.question, v = b.current_version || {}, tax = b.taxonomy || {};
+  const { base, kind } = diffBase(b);
+  const T = (cur, old) => base ? diffHTML(old, cur) : nl(cur);
+  const baseOpts = {}; (base?.options || []).forEach(o => baseOpts[o.key] = o);
+  const years = (tax.year || []).map(x => x.name).join('، ');
+  const claude = (v.options || []).filter(o => o.is_correct).map(o => o.key).join(', ') || '—';
+  const inQueue = S.queue.findIndex(r => r.qid === q.qid);
+  const access = b.my_access || 0;
+  const ms = q.match_status;
+  const openRound = (b.reviews || []).some(r => r.status === 'open');
+
+  const facts = [
+    years ? `<span>ورد في: <b>${esc(years)}</b></span>` : '',
+    q.source_question_no ? `<span>رقمه في المصدر: <b>${esc(q.source_question_no)}</b>${q.source_page ? ` (صفحة ${esc(q.source_page)})` : ''}</span>` : '',
+    tax.chapter ? `<span>الشابتر: <b>${esc(tax.chapter.map(x => x.name).join('، '))}</b></span>` : '',
+    `<span>الحالة: <b>${esc(STATUS_AR[q.status] || q.status)}</b></span>`
+  ].join('');
+
+  const verdict = `
+    <div class="verdict has-foot" aria-label="مقارنة الإجابتين">
+      <div class="side"><div class="who">حل Claude</div><div class="letter">${esc(claude)}</div></div>
+      <div class="side"><div class="who">الحل الأصلي (ملف الزملاء)</div><div class="letter">${esc(q.source_answer || '—')}</div>${q.source_answer_text ? `<div class="note">${esc(q.source_answer_text)}</div>` : ''}</div>
+    </div>
+    <div class="verdict-foot">
+      <span class="badge ${ms === 'agree' ? 'agree' : ms === 'disagree' ? 'disagree' : 'na'}">${ms === 'agree' ? 'متفق مع المصدر' : ms === 'disagree' ? 'مختلف مع المصدر' : 'لا مقارنة'}</span>
+      ${q.ai_confidence ? `<span class="small muted" style="margin-inline-start:8px">ثقة Claude: ${esc(CONF[q.ai_confidence] || q.ai_confidence)}</span>` : ''}
+      ${ms === 'disagree' && q.disagreement_reason ? `<div class="reason"><b>سبب الاختلاف:</b> ${esc(q.disagreement_reason)}</div>` : ''}
+    </div>`;
+
+  const lr = b.last_request;
+  const round2 = kind === 'request' ? `
+    <section class="panel round2"><h3>الجولة الثانية</h3>
+      <p style="margin:0"><b>طلبت:</b> ${esc(labelType(lr.review.revision_type))}${lr.review.comment_internal ? ` – ${nl(lr.review.comment_internal)}` : ''}${lr.review.voice_transcript ? `<br><span class="small muted">الفويس:</span> ${nl(lr.review.voice_transcript)}` : ''}</p>
+      <p style="margin:8px 0 0"><b>اتعمل:</b> ${nl(lr.review.resolution_note || '')}</p>
+      <p class="small muted" style="margin:8px 0 0">التغييرات مظللة <mark class="ins">هكذا</mark>، والمحذوف <del class="rem">مشطوب</del>.</p>
+    </section>` : kind === 'quick' ? `
+    <section class="panel round2"><h3>عُدّل تعديلًا سريعًا</h3><p style="margin:0">${nl(v.change_note || '')}</p>
+      <p class="small muted" style="margin:6px 0 0">سيراجع Claude اتساق الشرح في أول محادثة تعديلات. التغييرات مظللة.</p></section>` : '';
+
+  const incomplete = q.is_incomplete ? `
+    <section class="panel warn"><h3>سؤال ناقص في المصدر</h3>
+      ${q.source_answer_text ? `<p style="margin:0 0 6px">ما ورد في المصدر: <span dir="auto">${nl(q.source_answer_text)}</span></p>` : ''}
+      <p style="margin:0 0 10px">اختر: يظهر للطلاب كما هو مع ملاحظة توضح الوضع، أو اطلب تكميله.</p>
+      ${access >= 2 ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="inc-asis">يظهر كما هو مع ملاحظة</button><button class="btn" id="inc-complete">اطلب تكميله</button></div>` : ''}
+    </section>` : '';
+
+  const extraOn = S.showExtra;
+  const opts = (v.options || []).map(o => {
+    const old = baseOpts[o.key] || {};
+    return `<li class="opt ${o.is_correct ? 'correct' : ''}">
+      <div class="head"><span class="key">${esc(o.key)}.</span><span class="otext">${T(o.text, old.text)}</span>${o.is_correct ? '<span class="mark">✓ الإجابة</span>' : ''}</div>
+      ${o.explanation ? `<div class="expl">${T(o.explanation, old.explanation)}</div>` : ''}
+      ${extraOn && o.explanation_extra ? `<div class="expl extra"><span class="lbl">مزيد من الشرح</span>${T(o.explanation_extra, old.explanation_extra)}</div>` : ''}
+    </li>`;
+  }).join('');
+
+  const ref = b.reference ? `${esc(b.reference.name)}${b.reference.edition ? ` (${esc(b.reference.edition)})` : ''}` : '';
+  const refLine = (ref || v.reference_detail) ? `<p class="ref"><b>المرجع</b><span class="refv">${ref}${ref && v.reference_detail ? '<br>' : ''}${T(v.reference_detail, base?.reference_detail)}</span></p>` : '';
+
+  const hand = q.handwritten_note ? `
+    <section class="panel hand"><h3>${HAND_LABEL}</h3><div class="pre" dir="auto">${esc(q.handwritten_note)}</div>
+      ${q.handwritten_image_path ? `<img id="handimg" alt="صورة الملاحظة الأصلية" style="max-width:100%;margin-top:10px;border-radius:8px">` : ''}</section>` : '';
+
+  const studentNote = v.student_note ? `<section class="panel"><h3>ملاحظة للطلاب (تظهر في التطبيق)</h3><div class="pre" dir="auto">${T(v.student_note, base?.student_note)}</div></section>` : '';
+
+  const hist = (b.reviews || []).length ? `<details class="hist"><summary>سجل المراجعة (${b.reviews.length})</summary>
+    ${b.reviews.map(r => `<div class="hitem"><b>${esc(r.reviewer_name || '—')}</b> <span class="small muted">جولة ${r.round}، ${new Date(r.created_at).toLocaleString('ar-EG')}</span>
+      <div>${esc(DECISION_AR[r.decision] || r.decision)}${r.revision_type ? `: ${esc(labelType(r.revision_type))}` : ''}</div>
+      ${r.comment_internal ? `<div class="pre">${esc(r.comment_internal)}</div>` : ''}
+      ${r.voice_transcript ? `<div class="pre"><span class="muted">الفويس:</span> ${esc(r.voice_transcript)}</div>` : ''}
+      ${r.voice_path ? `<audio controls preload="none" data-voice="${esc(r.voice_path)}" style="width:100%;margin-top:6px"></audio>` : ''}
+      ${r.resolution_note ? `<div class="pre"><span class="muted">الرد:</span> ${esc(r.resolution_note)}</div>` : ''}
+    </div>`).join('')}</details>` : '';
+
+  const pos = inQueue >= 0 ? `${inQueue + 1} من ${S.queue.length}` : '';
+  $app.innerHTML = topBar(`<button class="linkbtn" id="back" aria-label="رجوع للقائمة">→ القائمة</button><span class="grow"></span><span class="small muted">${pos}</span><span class="count">${remaining()}</span>`) + `
+  <main class="wrap">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <h1 style="margin:4px 0 0;font-size:1.5rem">سؤال ${esc(q.qid_display)}</h1>
+      <span class="small muted" dir="ltr">${esc(q.code || '')}</span>
+      <span class="grow" style="flex:1"></span>
+      ${access >= 3 ? `<button class="linkbtn" id="qe">تعديل سريع</button>` : ''}
+    </div>
+    <div class="facts">${facts}</div>
+    ${verdict}
+    ${round2}
+    ${incomplete}
+    <article class="content" lang="en">
+      <p class="stem">${T(v.stem, base?.stem)}</p>
+      ${v.explanation_main ? `<div class="expl"><span class="lbl">الشرح</span>${T(v.explanation_main, base?.explanation_main)}</div>` : ''}
+      ${extraOn && v.explanation_extra ? `<div class="expl extra"><span class="lbl">مزيد من الشرح</span>${T(v.explanation_extra, base?.explanation_extra)}</div>` : ''}
+      <ul class="opts">${opts}</ul>
+    </article>
+    <p><button class="btn block" id="toggle-extra" aria-expanded="${extraOn}">${extraOn ? 'إخفاء مزيد من الشرح' : 'مزيد من الشرح'}</button></p>
+    ${refLine}
+    ${studentNote}
+    ${hand}
+    ${hist}
+    ${openRound ? `<section class="panel"><p style="margin:0">عليه طلب تعديل مفتوح، وسيعود لك بعد تنفيذه.</p></section>` : ''}
+    ${access < 2 ? `<section class="panel"><p style="margin:0">صلاحيتك على هذا السؤال قراءة فقط.</p></section>` : ''}
+  </main>
+  ${access >= 2 && ['in_review', 'revised'].includes(q.status) ? `
+  <div class="actions"><div class="actions-in">
+    <div id="apnote" class="approve-note hidden"><label class="f" for="apnote-t" style="margin-top:0">ملاحظة للطلاب مع الاعتماد (اختيارية)</label><textarea class="t" id="apnote-t" dir="auto" placeholder="تظهر للطلاب تحت الشرح"></textarea></div>
+    <div class="two"><button class="btn ok" id="approve">✅ موافق</button><button class="btn" id="revise">✏️ محتاج تعديل</button></div>
+    <p style="margin:6px 0 0;text-align:center"><button class="linkbtn quiet small" id="addnote">إضافة ملاحظة للطلاب مع الاعتماد</button></p>
+  </div></div>` : ''}`;
+
+  document.getElementById('back').onclick = () => { location.hash = ''; };
+  document.getElementById('toggle-extra').onclick = () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); };
+  const qe = document.getElementById('qe'); if (qe) qe.onclick = openQuickEdit;
+  const ap = document.getElementById('approve'); if (ap) ap.onclick = () => doApprove(document.getElementById('apnote-t').value);
+  const rv = document.getElementById('revise'); if (rv) rv.onclick = () => openRevision();
+  const an = document.getElementById('addnote'); if (an) an.onclick = () => { document.getElementById('apnote').classList.remove('hidden'); an.classList.add('hidden'); document.getElementById('apnote-t').focus(); };
+  const ia = document.getElementById('inc-asis'); if (ia) ia.onclick = () => { const bx = document.getElementById('apnote'); if (bx) { bx.classList.remove('hidden'); document.getElementById('addnote')?.classList.add('hidden'); const t = document.getElementById('apnote-t'); t.focus(); t.placeholder = 'مثال: هذا السؤال وصل ناقصًا في المصدر، ونعرضه كما ورد…'; toast('اكتب الملاحظة للطلاب ثم اضغط موافق.'); } };
+  const ic = document.getElementById('inc-complete'); if (ic) ic.onclick = () => openRevision({ type: 'other', comment: 'تكميل السؤال الناقص: ' });
+  if (q.handwritten_image_path) signed('handwritten-crops', q.handwritten_image_path).then(u => { const im = document.getElementById('handimg'); if (im && u) im.src = u; });
+  $app.querySelectorAll('audio[data-voice]').forEach(a => signed('voice-notes', a.dataset.voice).then(u => { if (u) a.src = u; }));
+}
+function labelType(v) { const t = (S.bundle?.revision_types || []).find(x => x.value === v); return t ? t.label : (v || ''); }
+async function signed(bucket, path) {
+  const { data } = await sb.storage.from(bucket).createSignedUrl(path, 3600);
+  return data?.signedUrl || null;
+}
+
+/* ---------- decisions ---------- */
+async function afterDecision(qid, msg) {
+  toast(msg);
+  await loadQueue();
+  await showAfterLast(qid);
+  const next = S.queue.find(r => r.qid !== qid);
+  location.hash = next ? `#q/${next.qid}` : '';
+}
+async function doApprove(note) {
+  const btn = document.getElementById('approve'); btn.disabled = true;
+  try {
+    await rpc('submit_review', { p_qid: S.qid, p_decision: 'approve', p_student_note: (note || '').trim() || null });
+    await afterDecision(S.qid, `اعتُمد السؤال ${S.bundle.question.qid_display}.`);
+  } catch (e) { btn.disabled = false; toast(errText(e), 4000); }
+}
+
+/* ---------- revision sheet + voice ---------- */
+const V = { rec: null, stream: null, chunks: [], blob: null, mime: '', sr: null, t0: 0, timer: null, lang: 'ar-EG', on: false };
+function pickMime() {
+  const c = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+  return (window.MediaRecorder && c.find(t => MediaRecorder.isTypeSupported(t))) || '';
+}
+function openRevision(pre = {}) {
+  const types = S.bundle.revision_types || [];
+  const sc = document.createElement('div'); sc.className = 'scrim';
+  const canRec = !!(navigator.mediaDevices && window.MediaRecorder);
+  const canSR = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  sc.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rvh">
+    <h2 id="rvh">طلب تعديل للسؤال ${esc(S.bundle.question.qid_display)}</h2>
+    <label class="f" for="rv-type">نوع التعديل</label>
+    <select class="t" id="rv-type"><option value="">اختر النوع</option>${types.map(t => `<option value="${esc(t.value)}" ${pre.type === t.value ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select>
+    <label class="f" for="rv-comment">تعليق للفريق</label>
+    <textarea class="t" id="rv-comment" dir="auto" placeholder="مثال: بسّط شرح الاختيار B">${esc(pre.comment || '')}</textarea>
+    <label class="f">فويس</label>
+    ${canRec ? `<div class="rec">
+      <button class="btn" id="rec-btn" type="button">● سجّل</button>
+      <span id="rec-state" class="small muted" aria-live="polite"></span>
+      ${canSR ? `<span class="seg" role="group" aria-label="لغة التحويل إلى نص"><button type="button" data-lang="ar-EG" aria-pressed="true">عربي</button><button type="button" data-lang="en-US" aria-pressed="false">English</button></span>` : ''}
+    </div>
+    <audio id="rec-play" controls class="hidden" style="width:100%;margin-top:8px"></audio>
+    <button class="linkbtn quiet small hidden" id="rec-del" type="button">احذف التسجيل</button>` : `<p class="hint">التسجيل غير مدعوم في هذا المتصفح. اكتب ملاحظتك في التعليق.</p>`}
+    <label class="f" for="rv-trans">نص الفويس ${canSR ? '(يُكتب تلقائيًا أثناء التسجيل، صحّحه قبل الإرسال)' : '(اكتبه أو الصقه)'}</label>
+    <textarea class="t" id="rv-trans" dir="auto"></textarea>
+    <label class="f" for="rv-student">ملاحظة للطلاب (اختيارية)</label>
+    <textarea class="t" id="rv-student" dir="auto" placeholder="تظهر في التطبيق فقط لو كتبتها"></textarea>
+    <div class="err" id="rv-err" role="alert"></div>
+    <div class="foot"><button class="btn primary" id="rv-send">أرسل طلب التعديل</button><button class="btn" id="rv-cancel">إلغاء</button></div>
+  </div>`;
+  document.body.appendChild(sc);
+  V.blob = null; V.chunks = [];
+  const close = () => { stopRec(); sc.remove(); };
+  sc.querySelector('#rv-cancel').onclick = close;
+  sc.querySelectorAll('[data-lang]').forEach(b => b.onclick = () => { V.lang = b.dataset.lang; sc.querySelectorAll('[data-lang]').forEach(x => x.setAttribute('aria-pressed', x === b)); });
+  const recBtn = sc.querySelector('#rec-btn');
+  if (recBtn) recBtn.onclick = () => V.on ? stopRec() : startRec(sc);
+  const del = sc.querySelector('#rec-del');
+  if (del) del.onclick = () => { V.blob = null; sc.querySelector('#rec-play').classList.add('hidden'); del.classList.add('hidden'); sc.querySelector('#rec-state').textContent = ''; };
+  (pre.comment ? sc.querySelector('#rv-comment') : sc.querySelector('#rv-type')).focus();
+  sc.querySelector('#rv-send').onclick = async () => {
+    const btn = sc.querySelector('#rv-send'); const err = sc.querySelector('#rv-err');
+    const type = sc.querySelector('#rv-type').value || null;
+    const comment = sc.querySelector('#rv-comment').value.trim() || null;
+    const trans = sc.querySelector('#rv-trans').value.trim() || null;
+    const student = sc.querySelector('#rv-student').value.trim() || null;
+    if (V.on) stopRec();
+    if (!type && !comment && !trans && !V.blob) { err.textContent = 'اختر نوع التعديل أو اكتب تعليقًا أو سجّل فويس.'; return; }
+    if (V.blob && !trans && !comment && !type) { err.textContent = 'Claude لا يسمع الصوت: اكتب نص الفويس أو تعليقًا قصيرًا.'; return; }
+    btn.disabled = true; err.textContent = '';
+    try {
+      let path = null;
+      if (V.blob) {
+        btn.textContent = 'جاري رفع الفويس…';
+        const ext = V.mime.includes('mp4') ? 'm4a' : V.mime.includes('ogg') ? 'ogg' : 'webm';
+        path = `${S.session.user.id}/${S.bundle.question.qid_display}_${Date.now()}.${ext}`;
+        const { error } = await sb.storage.from('voice-notes').upload(path, V.blob, { contentType: V.mime.split(';')[0], upsert: false });
+        if (error) throw error;
+      }
+      await rpc('submit_review', { p_qid: S.qid, p_decision: 'needs_revision', p_revision_type: type, p_comment: comment, p_student_note: student, p_voice_path: path, p_voice_transcript: trans });
+      sc.remove();
+      await afterDecision(S.qid, `أُرسل طلب التعديل للسؤال ${S.bundle.question.qid_display}.`);
+    } catch (e) { btn.disabled = false; btn.textContent = 'أرسل طلب التعديل'; err.textContent = errText(e); }
+  };
+}
+async function startRec(sc) {
+  const state = sc.querySelector('#rec-state'), btn = sc.querySelector('#rec-btn'), trans = sc.querySelector('#rv-trans');
+  try {
+    V.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch { state.textContent = 'لم يُسمح باستخدام الميكروفون. اسمح به من إعدادات المتصفح، أو اكتب ملاحظتك.'; return; }
+  V.mime = pickMime(); V.chunks = []; V.blob = null;
+  V.rec = new MediaRecorder(V.stream, V.mime ? { mimeType: V.mime, audioBitsPerSecond: 20000 } : { audioBitsPerSecond: 20000 });
+  V.mime = V.rec.mimeType || V.mime || 'audio/webm';
+  V.rec.ondataavailable = e => { if (e.data && e.data.size) V.chunks.push(e.data); };
+  V.rec.onstop = () => {
+    V.blob = new Blob(V.chunks, { type: V.mime.split(';')[0] });
+    const play = sc.querySelector('#rec-play'); if (play) { play.src = URL.createObjectURL(V.blob); play.classList.remove('hidden'); }
+    sc.querySelector('#rec-del')?.classList.remove('hidden');
+    state.textContent = `تسجيل جاهز (${Math.round(V.blob.size / 1024)} KB)`;
+  };
+  V.rec.start(1000); V.on = true; V.t0 = Date.now();
+  btn.textContent = '■ إيقاف';
+  V.timer = setInterval(() => {
+    const s = Math.floor((Date.now() - V.t0) / 1000);
+    state.innerHTML = `<span class="dot" style="display:inline-block"></span> ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    if (s >= MAX_REC_SECONDS) stopRec();
+  }, 500);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    const startSR = () => {
+      const r = new SR(); r.lang = V.lang; r.continuous = true; r.interimResults = false;
+      r.onresult = ev => { for (let i = ev.resultIndex; i < ev.results.length; i++) if (ev.results[i].isFinal) trans.value = (trans.value ? trans.value.trimEnd() + ' ' : '') + ev.results[i][0].transcript.trim(); };
+      r.onerror = () => { };
+      r.onend = () => { if (V.on) { try { startSR(); } catch { } } };
+      try { r.start(); V.sr = r; } catch { }
+    };
+    startSR();
+  }
+  sc._btn = btn;
+}
+function stopRec() {
+  if (!V.on) return;
+  V.on = false; clearInterval(V.timer);
+  try { V.sr && V.sr.stop(); } catch { } V.sr = null;
+  try { V.rec && V.rec.state !== 'inactive' && V.rec.stop(); } catch { }
+  try { V.stream && V.stream.getTracks().forEach(t => t.stop()); } catch { }
+  const b = document.getElementById('rec-btn'); if (b) b.textContent = '● سجّل من جديد';
+}
+
+/* ---------- quick edit (access 3) ---------- */
+function openQuickEdit() {
+  const v = S.bundle.current_version;
+  const sc = document.createElement('div'); sc.className = 'scrim';
+  const ta = (id, val, cls = 'en', rows = 3) => `<textarea class="t ${cls}" id="${id}" rows="${rows}">${esc(val || '')}</textarea>`;
+  sc.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="qeh">
+    <h2 id="qeh">تعديل سريع للسؤال ${esc(S.bundle.question.qid_display)}</h2>
+    <p class="hint">للتعديلات البسيطة فقط. الإجابة الصحيحة لا تتغير من هنا؛ لتغييرها اطلب تعديلًا بنوع "تغيير الإجابة".</p>
+    <label class="f" for="qe-stem">نص السؤال</label>${ta('qe-stem', v.stem)}
+    <label class="f" for="qe-main">الشرح (تحت السؤال)</label>${ta('qe-main', v.explanation_main, 'en', 4)}
+    <label class="f" for="qe-extra">مزيد من الشرح (تحت السؤال)</label>${ta('qe-extra', v.explanation_extra, 'en', 4)}
+    ${(v.options || []).map((o, i) => `<fieldset style="border:1px solid var(--line);border-radius:12px;margin-top:14px;padding:8px 12px">
+      <legend style="font-weight:700">الاختيار ${esc(o.key)}${o.is_correct ? ' ✓' : ''}</legend>
+      <label class="f" for="qe-o${i}-t" style="margin-top:4px">النص</label>${ta(`qe-o${i}-t`, o.text, 'en', 2)}
+      <label class="f" for="qe-o${i}-e">الشرح</label>${ta(`qe-o${i}-e`, o.explanation)}
+      <label class="f" for="qe-o${i}-x">مزيد من الشرح (اختياري)</label>${ta(`qe-o${i}-x`, o.explanation_extra)}
+    </fieldset>`).join('')}
+    <label class="f" for="qe-ref">تفاصيل المرجع</label><input class="t" id="qe-ref" dir="ltr" value="${esc(v.reference_detail || '')}">
+    <label class="f" for="qe-note">ملاحظة للطلاب</label>${ta('qe-note', v.student_note, '', 2)}
+    <label class="f" for="qe-why">سبب التعديل (مطلوب)</label><input class="t" id="qe-why" dir="auto">
+    <div class="err" id="qe-err" role="alert"></div>
+    <div class="foot"><button class="btn primary" id="qe-save">احفظ التعديل</button><button class="btn" id="qe-cancel">إلغاء</button></div>
+  </div>`;
+  document.body.appendChild(sc);
+  sc.querySelector('#qe-cancel').onclick = () => sc.remove();
+  sc.querySelector('#qe-stem').focus();
+  sc.querySelector('#qe-save').onclick = async () => {
+    const g = id => sc.querySelector('#' + id).value;
+    const norm = s => (s || '').trim();
+    const why = norm(g('qe-why')); const err = sc.querySelector('#qe-err');
+    if (!why) { err.textContent = 'اكتب سبب التعديل.'; return; }
+    const ch = {};
+    if (norm(g('qe-stem')) !== norm(v.stem)) ch.stem = norm(g('qe-stem'));
+    if (norm(g('qe-main')) !== norm(v.explanation_main)) ch.explanation_main = norm(g('qe-main')) || null;
+    if (norm(g('qe-extra')) !== norm(v.explanation_extra)) ch.explanation_extra = norm(g('qe-extra')) || null;
+    if (norm(g('qe-ref')) !== norm(v.reference_detail)) ch.reference_detail = norm(g('qe-ref')) || null;
+    if (norm(g('qe-note')) !== norm(v.student_note)) ch.student_note = norm(g('qe-note')) || null;
+    let optChanged = false;
+    const opts = (v.options || []).map((o, i) => {
+      const n = { ...o, text: norm(g(`qe-o${i}-t`)), explanation: norm(g(`qe-o${i}-e`)) };
+      const x = norm(g(`qe-o${i}-x`)); if (x) n.explanation_extra = x; else delete n.explanation_extra;
+      if (n.text !== norm(o.text) || n.explanation !== norm(o.explanation) || (n.explanation_extra || '') !== norm(o.explanation_extra)) optChanged = true;
+      return n;
+    });
+    if (optChanged) ch.options = opts;
+    if (!Object.keys(ch).length) { err.textContent = 'لم يتغير شيء.'; return; }
+    const btn = sc.querySelector('#qe-save'); btn.disabled = true;
+    try {
+      await rpc('quick_edit', { p_qid: S.qid, p_changes: ch, p_note: why });
+      sc.remove(); toast('حُفظ التعديل. السؤال الآن "معدّل" وينتظر الاعتماد.');
+      await loadQueue(); await openQuestion(S.qid);
+    } catch (e) { btn.disabled = false; err.textContent = errText(e); }
+  };
+}
+
+/* ---------- boot ---------- */
+// Supabase fires INITIAL_SESSION on load, then SIGNED_IN / SIGNED_OUT / PASSWORD_RECOVERY.
+// Work is deferred with setTimeout so no Supabase call runs inside the auth callback.
+let currentUser = null;
+sb.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY') { S.recovery = true; S.session = session; setTimeout(() => renderAuth('reset'), 0); return; }
+  if (event === 'SIGNED_OUT') { currentUser = null; S.session = null; S.profile = null; setTimeout(() => renderAuth('in'), 0); return; }
+  if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+    const uid = session?.user?.id || null;
+    if (event === 'SIGNED_IN' && uid && uid === currentUser) { S.session = session; return; } // token refresh / tab focus
+    currentUser = uid;
+    setTimeout(() => onSession(session), 0);
+  }
+  if (event === 'TOKEN_REFRESHED') S.session = session;
+});
+</script>
+</body>
+</html>
