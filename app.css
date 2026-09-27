@@ -39,7 +39,7 @@ a{color:var(--cobalt)}
 .brand{font-weight:700;letter-spacing:.2px}
 .bar .grow{flex:1}
 .count{font-weight:600;color:var(--cobalt);white-space:nowrap}
-.linkbtn{background:none;border:0;padding:6px 4px;color:var(--cobalt);cursor:pointer;font-weight:500}
+.linkbtn{background:none;border:0;padding:6px 4px;color:var(--cobalt);cursor:pointer;font-weight:600}
 .linkbtn.quiet{color:var(--ink-2);font-weight:400}
 
 /* buttons */
@@ -361,3 +361,12 @@ details.tl summary{cursor:pointer;font-weight:700;color:var(--cobalt);padding:8p
 @media (prefers-color-scheme:dark){.ok-dot{color:#0E1426}}
 .share-box{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin-bottom:6px}
 .share-box .btn{flex:0 0 auto}
+
+/* ===== v10: performance + footer ===== */
+.qlist li{content-visibility:auto;contain-intrinsic-size:auto 96px}
+.evs .ev{content-visibility:auto;contain-intrinsic-size:auto 110px}
+.appfoot{margin:30px 0 10px;text-align:center;color:var(--ink-3);font-size:.85rem;line-height:1.7}
+.appfoot .ver{font-weight:600;color:var(--ink-2)}
+.appfoot .brandline{margin-top:4px}
+.appfoot .corp{font-family:var(--read);font-weight:600;color:var(--cobalt);letter-spacing:.2px;font-size:.95rem}
+.appfoot .linkbtn{margin-top:6px}

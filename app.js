@@ -7,6 +7,8 @@ const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل مع�
 const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
+const APP_VERSION = '3.6';
+const APP_BUILD = '27/9/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false };
@@ -106,8 +108,10 @@ function renderAuth(mode = 'in', msg = '') {
     ${mode === 'in' ? `<p><button class="linkbtn quiet" data-mode="forgot">نسيت كلمة السر؟</button></p>` : ''}
     ${mode === 'forgot' ? `<p><button class="linkbtn quiet" data-mode="in">رجوع لتسجيل الدخول</button></p>` : ''}
     ${installCard()}
+    ${appFooter()}
   </main>`;
   $app.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => renderAuth(b.dataset.mode));
+  bindFooter();
   bindInstall();
   document.getElementById('authf').onsubmit = async ev => {
     ev.preventDefault();
@@ -147,8 +151,9 @@ function renderPending() {
     <button class="btn primary block" id="recheck">تحقق مرة أخرى</button>
     <p><button class="linkbtn quiet" id="out">خروج</button></p>
     ${installCard()}
+    ${appFooter()}
   </main>`;
-  bindInstall();
+  bindInstall(); bindFooter();
   document.getElementById('recheck').onclick = () => onSession(S.session);
   document.getElementById('out').onclick = signOut;
 }
@@ -325,7 +330,7 @@ async function loadQueue() {
   const tasks = [rpc('reviewer_questions'), rpc('reviewer_notices'), Drafts.pull()];
   if (S.isAdmin) tasks.push(rpc('pipeline_status').catch(() => null));
   const [q, n, , p] = await Promise.all(tasks);
-  S.rows = q || []; S.notices = n || []; S.pipeline = p || null;
+  S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
   S.queue = S.rows.filter(FOLDERS[0].test);
 }
 async function route() {
@@ -334,10 +339,30 @@ async function route() {
   try {
     if (location.hash === '#activity') { if (!S.rows.length) await loadQueue(); await renderActivity(false); }
     else if (m) await openQuestion(Number(m[1]));
-    else { closeSheets(); await loadQueue(); renderQueue(); }
+    else {
+      closeSheets();
+      const fresh = S.rowsAt && Date.now() - S.rowsAt < 60000 && !S.dirty;
+      if (!fresh) await loadQueue();
+      renderQueue();
+      if (S.listScroll) { const y = S.listScroll; requestAnimationFrame(() => scrollTo(0, y)); }
+    }
   } catch (e) { $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { location.hash = ''; route(); }; }
 }
-window.addEventListener('hashchange', () => { if (S.session && S.profile?.is_active) route(); });
+let lastHash = location.hash;
+window.addEventListener('hashchange', () => {
+  if (!lastHash.startsWith('#q/') && lastHash !== '#activity' && location.hash.startsWith('#q/')) S.listScroll = scrollY;   // leaving the list
+  if (!location.hash) { /* back to list keeps listScroll */ } else if (!location.hash.startsWith('#q/')) S.listScroll = 0;
+  lastHash = location.hash;
+  if (S.session && S.profile?.is_active) route();
+});
+// pause background work while the app is hidden; refresh quietly when it comes back after a while
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); stopDictation(); stopSolverTimer(); return; }
+  if (!S.session || !S.profile?.is_active) return;
+  if (hiddenAt && Date.now() - hiddenAt > 120000) { S.dirty = true; if (!location.hash && !document.querySelector('.scrim')) route(); }
+  else if (!location.hash && S.isAdmin && document.getElementById('solver-box')) loadSolver(false);
+});
 function topBar(inner) { return `<header class="bar"><div class="bar-in">${inner}</div></header>`; }
 const remaining = () => `فاضلك ${S.queue.length} سؤال`;
 
@@ -360,7 +385,8 @@ function renderQueue() {
   const v = S.view, list = listFor();
   const counts = Object.fromEntries(FOLDERS.map(f => [f.id, S.rows.filter(f.test).length]));
   const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete;
-  const items = list.map(r => `<li><a href="#q/${r.qid}">
+  const shown = list.slice(0, S.listLimit || 60);
+  const items = shown.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
       <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
     </a></li>`).join('');
@@ -382,15 +408,19 @@ function renderQueue() {
         <button class="chip" aria-pressed="${v.incomplete}" id="f-inc">الناقص فقط</button>
         ${activeFilters ? '<button class="chip" id="f-clear">مسح التصفية</button>' : ''}
       </div></div>` : ''}
-    <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال</span></div>
-    ${list.length ? `<ul class="qlist">${items}</ul>
+    <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
+    ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#q/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
       : `<div class="empty"><p>لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.</p><button class="btn" id="refresh">تحديث</button></div>`}
     ${installListCard()}
+    ${appFooter()}
   </main>`;
   document.getElementById('out').onclick = signOut;
-  const r = document.getElementById('refresh'); if (r) r.onclick = route;
-  const set = patch => { Object.assign(S.view, patch); saveView(); const y = scrollY; renderQueue(); scrollTo(0, y); };
+  const r = document.getElementById('refresh'); if (r) r.onclick = () => { S.dirty = true; route(); };
+  const rl = document.getElementById('reload'); if (rl) rl.onclick = async () => { rl.disabled = true; await loadQueue(); renderQueue(); notify('تم تحديث القائمة', '', 'info', 1800); };
+  const mq = document.getElementById('more-q'); if (mq) mq.onclick = () => { S.listLimit = (S.listLimit || 60) + 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
+  bindFooter();
+  const set = patch => { Object.assign(S.view, patch); saveView(); S.listLimit = 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
   $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => set({ folder: b.dataset.folder }));
   $app.querySelectorAll('[data-conf]').forEach(b => b.onclick = () => set({ conf: b.dataset.conf }));
   document.getElementById('sort').onchange = e => set({ sort: e.target.value });
@@ -541,12 +571,15 @@ async function openQuestion(qid) {
   stopSolverTimer(); closeSheets();
   if (!S.rows.length && !S.notices.length) await loadQueue();
   if (!S.bundle || S.qid !== qid) $app.innerHTML = '<div class="loading">جاري تحميل السؤال…</div>';
-  const [b, tl] = await Promise.all([rpc('question_bundle', { p_qid: qid }), rpc('question_timeline', { p_qid: qid }).catch(() => null)]);
+  const pre = S.prefetch && S.prefetch[qid];
+  const [b, tl] = pre && Date.now() - pre.at < 60000 ? [pre.b, pre.tl] : await Promise.all([rpc('question_bundle', { p_qid: qid }), rpc('question_timeline', { p_qid: qid }).catch(() => null)]);
+  if (S.prefetch) delete S.prefetch[qid];
   if (!b) throw new Error('هذا السؤال غير متاح لك.');
   S.timeline = tl || [];
   S.bundle = b; S.qid = qid; S.showExtra = false;
   const nd = Drafts.get(qid, 'approve_note'); S.noteDraft = nd?.payload?.note || ''; S.noteOpen = !!nd;
   renderQuestion(); scrollTo(0, 0);
+  prefetchNext();
   rpc('mark_seen', { p_qid: qid }).then(() => { const r = S.rows.find(x => x.qid === qid); if (r) r.seen = true; }).catch(() => { });
   if (S.pendingSheet) {
     // the app was closed while this window was open: reopen it with everything that was typed or recorded
@@ -561,6 +594,18 @@ async function openQuestion(qid) {
     return;
   }
   await showBeforeFirst(qid);
+}
+// quietly load the next question while the current one is being read (skipped in data-saver mode)
+function prefetchNext() {
+  const c = navigator.connection; if (c && (c.saveData || /2g/.test(c.effectiveType || ''))) return;
+  const next = navInfo().next; if (!next || (S.prefetch && S.prefetch[next.qid])) return;
+  const run = async () => {
+    try {
+      const [b, tl] = await Promise.all([rpc('question_bundle', { p_qid: next.qid }), rpc('question_timeline', { p_qid: next.qid }).catch(() => null)]);
+      if (b) { S.prefetch = S.prefetch || {}; S.prefetch[next.qid] = { b, tl, at: Date.now() }; }
+    } catch { }
+  };
+  (window.requestIdleCallback || (f => setTimeout(f, 900)))(run);
 }
 function navInfo() {
   // navigate inside the current folder; if the question is not in it (opened by number or link), use its own folder
@@ -786,7 +831,7 @@ function attachSwipe(el, onNext, onPrev) {
 }
 
 /* ---------- decisions ---------- */
-async function refreshCurrent() { await loadQueue(); await openQuestion(S.qid); }
+async function refreshCurrent() { S.prefetch = {}; await loadQueue(); await openQuestion(S.qid); }
 async function afterDecision(qid, title, sub) {
   notify(title, sub);
   const hadTodo = S.queue.length;
@@ -1214,6 +1259,24 @@ function openUndo() {
       await refreshCurrent();
     } catch (e) { go.disabled = false; sheet.querySelector('#u-err').textContent = errText(e); }
   };
+}
+
+/* ---------- footer: version, brand line, force update ---------- */
+function appFooter() {
+  return `<footer class="appfoot">
+    <div class="ver">مراجعة OOC · الإصدار <bdi dir="ltr">${APP_VERSION}</bdi> <span class="muted">(${APP_BUILD})</span></div>
+    <div class="brandline">بفضل الله، إحدى خدمات<br><bdi dir="ltr" class="corp">Online Ophthalmology Corporation</bdi></div>
+    <button class="linkbtn quiet small" type="button" data-update>🔄 تحديث التطبيق لآخر إصدار</button>
+  </footer>`;
+}
+function bindFooter() {
+  document.querySelectorAll('[data-update]').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'جاري التحديث…';
+    try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch { }
+    try { const keys = await caches.keys(); await Promise.all(keys.filter(k => k.startsWith('ooc-review')).map(k => caches.delete(k))); } catch { }
+    Drafts.flush(); Resume.save();
+    location.reload();
+  });
 }
 
 /* ---------- PWA: install guide (Android / computer / Apple) ---------- */
