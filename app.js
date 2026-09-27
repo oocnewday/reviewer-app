@@ -7,7 +7,7 @@ const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل مع�
 const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '3.7';
+const APP_VERSION = '3.8';
 const APP_BUILD = '27/9/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -424,7 +424,7 @@ function renderQueue() {
   const shown = list.slice(0, S.listLimit || 60);
   const items = shown.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
-      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
+      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${studentLine(r.student_state)}${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
     </a></li>`).join('');
   $app.innerHTML = topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span>${installBtn()}<span class="small muted who">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`) + `
   <main class="wrap">
@@ -477,6 +477,25 @@ function renderQueue() {
   if (S.isAdmin && S.pipeline) loadSolver();
 }
 
+/* What students see for each question (student_state from the database, migration 026).
+   A filled dot = shown to students; a ring = hidden. Labels are fixed text, so no escaping is needed. */
+const STUDENT_STATE = {
+  reviewed: ['ظاهر للطلاب – <bdi dir="ltr">Reviewed</bdi>', 'on'],
+  ai: ['ظاهر للطلاب – بانتظار مراجعتك', 'ai'],
+  hidden_disagree: ['مخفي – اختلاف مع المصدر، محتاج اعتمادك', 'wait'],
+  hidden_low_confidence: ['مخفي – ثقة Claude منخفضة، محتاج اعتمادك', 'wait'],
+  hidden_no_source: ['مخفي – المصدر من غير إجابة، محتاج اعتمادك', 'wait'],
+  hidden_incomplete: ['مخفي – سؤال ناقص، محتاج قرارك', 'wait'],
+  hidden_answer_fix: ['مخفي – لحد تصليح الإجابة', 'fix'],
+  hidden_admin: ['مخفي بقرار الإدارة', 'off'],
+  hidden_archived: ['مخفي – مؤرشف', 'off'],
+  not_ready: ['مش ظاهر – لسه ماتحلّش', 'off'],
+};
+function studentLine(state, big) {
+  const s = STUDENT_STATE[state];
+  if (!s) return '';
+  return `<div class="sv sv-${s[1]}${big ? ' sv-big' : ''}"><span class="sv-i" aria-hidden="true"></span><span>${s[0]}</span></div>`;
+}
 const NOTE_STATE = { published: ['منشورة للطلاب', 'ok'], pending: ['مستنية الاعتماد', 'amber'], in_request: ['في طلب تعديل', 'cobalt'] };
 function notePreview(r) {
   const [label, cls] = NOTE_STATE[r.note_state] || ['', ''];
@@ -780,6 +799,7 @@ function renderQuestion() {
       <span class="small muted" dir="ltr">${esc(q.code || '')}</span>
     </div>
     <div class="facts">${facts}</div>
+    ${studentLine(b.student_state, true)}
     ${draftPanels}
     ${verdict}
     ${reqPanel}
@@ -884,7 +904,7 @@ async function doApprove(note) {
   try {
     await rpc('submit_review', { p_qid: S.qid, p_decision: 'approve', p_student_note: (note || '').trim() || null });
     S.noteDraft = ''; S.noteOpen = false; Drafts.clear(S.qid, 'approve_note'); Drafts.clear(S.qid, 'request');
-    await afterDecision(S.qid, `تم اعتماد السؤال رقم ${S.bundle.question.qid_display} بفضل الله`, (note || '').trim() ? 'واتنشرت ملاحظتك للطلاب معاه.' : '');
+    await afterDecision(S.qid, `تم اعتماد السؤال رقم ${S.bundle.question.qid_display} بفضل الله`, 'هيظهر للطلاب بعلامة Reviewed' + ((note || '').trim() ? '، ومعاه ملاحظتك.' : '.'));
   } catch (e) { if (btn) btn.disabled = false; fail(e); }
 }
 
@@ -1171,7 +1191,8 @@ async function openRevision(pre = {}) {
       decided = true; V.blob = null;
       await Drafts.clear(q.qid, kind); Resume.save({ sheet: null }); close(true);
       if (edit) { notify(`تم حفظ التعديل على طلبك للسؤال رقم ${q.qid_display} بفضل الله`); await refreshCurrent(); }
-      else await afterDecision(q.qid, `تم إرسال طلب التعديل للسؤال رقم ${q.qid_display} بفضل الله`, 'هيرجعلك في فولدر "عدّلها Claude" بعد التنفيذ.');
+      else await afterDecision(q.qid, `تم إرسال طلب التعديل للسؤال رقم ${q.qid_display} بفضل الله`,
+        (st.type === 'change_answer' ? 'واتخفى السؤال من الطلاب لحد ما التصليح يتعتمد. ' : '') + 'هيرجعلك في فولدر "عدّلها Claude" بعد التنفيذ.');
     } catch (e) {
       btn.disabled = false; btn.textContent = `✓ ${edit ? 'تأكيد حفظ التعديل على طلبك' : 'تأكيد وإرسال الطلب'}`;
       err.textContent = errText(e) + ' — مسودتك محفوظة، جرّب تاني.';

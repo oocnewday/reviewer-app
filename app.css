@@ -91,6 +91,20 @@ textarea.t.en{font-family:var(--read);direction:ltr;text-align:left}
 .tag.warn{background:var(--warn-2);color:var(--warn)}
 .tag.amber{background:var(--amber-2);color:var(--amber)}
 .tag.cobalt{background:var(--cobalt-2);color:var(--cobalt)}
+/* student visibility line (3.8): filled dot = shown to students, ring = hidden */
+.sv{display:flex;align-items:flex-start;gap:7px;margin-top:5px;font-size:.8rem;font-weight:600;line-height:1.35;color:var(--ink-3)}
+.sv-i{flex:none;width:8px;height:8px;margin-top:.36em;border-radius:50%;background:currentColor}
+.sv-wait .sv-i,.sv-fix .sv-i,.sv-off .sv-i{background:transparent;box-shadow:inset 0 0 0 2px currentColor}
+.sv-on{color:var(--ok)}
+.sv-ai{color:var(--cobalt)}
+.sv-wait{color:var(--amber)}
+.sv-fix{color:var(--warn)}
+.sv-big{display:inline-flex;margin:0 0 14px;padding:5px 14px 5px 12px;border-radius:999px;font-size:.88rem;background:var(--line-2)}
+.sv-big .sv-i{width:9px;height:9px;margin-top:.33em}
+.sv-big.sv-on{background:var(--ok-2)}
+.sv-big.sv-ai{background:var(--cobalt-2)}
+.sv-big.sv-wait{background:var(--amber-2)}
+.sv-big.sv-fix{background:var(--warn-2)}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:var(--radius);padding:28px 18px;text-align:center}
 
 /* question screen */
