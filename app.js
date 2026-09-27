@@ -7,7 +7,7 @@ const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل مع�
 const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '3.6';
+const APP_VERSION = '3.7';
 const APP_BUILD = '27/9/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -17,19 +17,55 @@ const $app = document.getElementById('app');
 /* ---------- helpers ---------- */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const nl = s => esc(s).replace(/\n/g, '<br>');
-function toast(msg, ms = 2600) {
-  const t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg;
-  document.body.appendChild(t); setTimeout(() => t.remove(), ms);
-}
-// reassuring message box (green = done, red = problem, blue = info); tap to dismiss
+// reassuring message box (green = done, red = problem, blue = info)
+// dismiss: tap, swipe in any direction, Esc; the timer pauses while a finger is on it
+let nboxKill = null;
 function notify(title, sub = '', kind = 'ok', ms = 4200) {
+  if (nboxKill) nboxKill();                                   // the previous box cleans up its own timer and key listener
   document.querySelectorAll('.nbox').forEach(x => x.remove());
   const n = document.createElement('div'); n.className = `nbox ${kind === 'ok' ? '' : kind}`;
   n.setAttribute('role', kind === 'err' ? 'alert' : 'status');
-  n.innerHTML = `<span class="ic" aria-hidden="true">${kind === 'ok' ? '✓' : kind === 'err' ? '!' : 'i'}</span><div><div class="tt">${esc(title)}</div>${sub ? `<div class="sb">${esc(sub)}</div>` : ''}</div>`;
-  const bye = () => { n.classList.add('out'); setTimeout(() => n.remove(), 260); };
-  n.onclick = bye; document.body.appendChild(n); setTimeout(bye, ms);
+  n.innerHTML = `<span class="ic" aria-hidden="true">${kind === 'ok' ? '✓' : kind === 'err' ? '!' : 'i'}</span><div><div class="tt">${esc(title)}</div>${sub ? `<div class="sb">${esc(sub)}</div>` : ''}</div><span class="nbar" style="animation-duration:${ms}ms" aria-hidden="true"></span>`;
+  document.body.appendChild(n);
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let left = ms, t0 = Date.now(), timer = null, gone = false;
+  const place = (dx, dy, o) => { n.style.transform = `translate(calc(-50% + ${dx}px), ${dy}px)`; n.style.opacity = o; };
+  const bye = (dx = 0, dy = -24) => {
+    if (gone) return; gone = true; clearTimeout(timer);
+    document.removeEventListener('keydown', onKey); if (nboxKill === kill) nboxKill = null;
+    n.style.transition = still ? 'opacity .15s' : 'transform .22s ease-out, opacity .22s ease-out';
+    if (!still) place(dx, dy, 0); else n.style.opacity = 0;
+    setTimeout(() => n.remove(), 240);
+  };
+  const run = () => { t0 = Date.now(); clearTimeout(timer); timer = setTimeout(() => bye(), left); n.classList.remove('paused'); };
+  const hold = () => { clearTimeout(timer); left = Math.max(800, left - (Date.now() - t0)); n.classList.add('paused'); };
+  // finger (or mouse) follows the box; far or fast enough = fly away in that direction
+  let x0 = null, y0 = null, tStart = 0, dx = 0, dy = 0;
+  n.addEventListener('pointerdown', e => {
+    if (gone) return; x0 = e.clientX; y0 = e.clientY; tStart = Date.now(); dx = dy = 0;
+    hold(); n.setPointerCapture && n.setPointerCapture(e.pointerId); n.style.transition = 'none';
+  });
+  n.addEventListener('pointermove', e => {
+    if (x0 === null) return;
+    dx = e.clientX - x0; dy = e.clientY - y0;
+    const d = Math.hypot(dx, dy); place(dx, dy, Math.max(0.15, 1 - d / 260));
+  });
+  const end = () => {
+    if (x0 === null) return; x0 = null;
+    const d = Math.hypot(dx, dy), v = d / Math.max(1, Date.now() - tStart);
+    if (d < 8) { if (Date.now() - tStart < 350) return bye(); n.style.transition = ''; return run(); }   // quick tap closes; a long press was for reading
+    if (d > 70 || v > 0.6) {                                   // a swipe: leave in its direction
+      const k = 420 / Math.max(d, 1); return bye(dx * k, dy * k);
+    }
+    n.style.transition = 'transform .2s ease, opacity .2s ease'; place(0, 0, 1); run();   // not far enough: back in place
+  };
+  n.addEventListener('pointerup', end); n.addEventListener('pointercancel', end);
+  const onKey = e => { if (e.key === 'Escape' && !document.querySelector('.scrim')) bye(); };
+  const kill = () => { gone = true; clearTimeout(timer); document.removeEventListener('keydown', onKey); };
+  document.addEventListener('keydown', onKey); nboxKill = kill;
+  run();
 }
+function toast(msg, ms = 2600) { notify(msg, '', 'info', ms); }
 const fail = e => notify('لم يتم الإجراء', errText(e), 'err', 6000);
 function errText(e) {
   const m = (e && (e.message || e.error_description || e.msg)) || String(e);

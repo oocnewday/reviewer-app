@@ -239,7 +239,6 @@ textarea.t.dict-target{border-color:var(--cobalt);box-shadow:0 0 0 1px var(--cob
 @media (prefers-color-scheme:dark){.nbox .ic{color:#0E1426}}
 .nbox .tt{font-weight:700;line-height:1.45}
 .nbox .sb{font-size:.9rem;color:var(--ink-2);margin-top:2px}
-.nbox.out{opacity:0;transform:translate(-50%,-8px);transition:opacity .25s,transform .25s}
 @keyframes ndrop{from{opacity:0;transform:translate(-50%,-12px)}to{opacity:1;transform:translate(-50%,0)}}
 @media (prefers-reduced-motion:reduce){.nbox{animation:none}.nbox.out{transition:none}}
 
@@ -370,3 +369,12 @@ details.tl summary{cursor:pointer;font-weight:700;color:var(--cobalt);padding:8p
 .appfoot .brandline{margin-top:4px}
 .appfoot .corp{font-family:var(--read);font-weight:600;color:var(--cobalt);letter-spacing:.2px;font-size:.95rem}
 .appfoot .linkbtn{margin-top:6px}
+
+/* ===== v12: swipeable messages ===== */
+.nbox{touch-action:none;user-select:none;-webkit-user-select:none;overflow:hidden;will-change:transform}
+.nbox .nbar{position:absolute;inset-inline:0;bottom:0;height:3px;background:currentColor;opacity:.25;transform-origin:right;animation:nbar linear forwards}
+.nbox{color:var(--ok)} .nbox.err{color:var(--warn)} .nbox.info{color:var(--cobalt)}
+.nbox .tt{color:var(--ink)} .nbox .sb{color:var(--ink-2)}
+.nbox.paused .nbar{animation-play-state:paused}
+@keyframes nbar{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@media (prefers-reduced-motion:reduce){.nbox .nbar{animation:none;display:none}}
