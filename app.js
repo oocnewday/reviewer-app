@@ -320,6 +320,8 @@ function listFor(view = S.view) {
 }
 async function loadQueue() {
   if (!S.draftsLoaded) { Drafts.load(); S.draftsLoaded = true; }
+  const since = localStorage.getItem(FEED_KEY()) || new Date(Date.now() - 7 * 864e5).toISOString();
+  rpc('team_activity_new_count', { p_since: since }).then(n => { S.newCount = n || 0; const bd = document.getElementById('feed-n'); if (bd) { bd.textContent = S.newCount; bd.classList.toggle('hidden', !S.newCount); } }).catch(() => { });
   const tasks = [rpc('reviewer_questions'), rpc('reviewer_notices'), Drafts.pull()];
   if (S.isAdmin) tasks.push(rpc('pipeline_status').catch(() => null));
   const [q, n, , p] = await Promise.all(tasks);
@@ -330,7 +332,8 @@ async function route() {
   if (!S.view) S.view = loadView();
   const m = location.hash.match(/^#q\/(\d+)/);
   try {
-    if (m) await openQuestion(Number(m[1]));
+    if (location.hash === '#activity') { if (!S.rows.length) await loadQueue(); await renderActivity(false); }
+    else if (m) await openQuestion(Number(m[1]));
     else { closeSheets(); await loadQueue(); renderQueue(); }
   } catch (e) { $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { location.hash = ''; route(); }; }
 }
@@ -359,11 +362,12 @@ function renderQueue() {
   const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete;
   const items = list.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
-      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}</span>
+      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
     </a></li>`).join('');
   $app.innerHTML = topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span>${installBtn()}<span class="small muted who">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`) + `
   <main class="wrap">
     ${staffCard()}
+    <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" pattern="[0-9]*" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
     <div class="chips" role="tablist" aria-label="الفولدرات">${FOLDERS.filter(f => f.id !== 'drafts' || counts.drafts || v.folder === 'drafts').map(f => `<button class="chip" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}">${f.label}<span class="n">${counts[f.id]}</span></button>`).join('')}</div>
     <div class="tools">
@@ -382,6 +386,7 @@ function renderQueue() {
     ${list.length ? `<ul class="qlist">${items}</ul>
       <p style="margin-top:16px"><a class="btn primary block" href="#q/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
       : `<div class="empty"><p>لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.</p><button class="btn" id="refresh">تحديث</button></div>`}
+    ${installListCard()}
   </main>`;
   document.getElementById('out').onclick = signOut;
   const r = document.getElementById('refresh'); if (r) r.onclick = route;
@@ -413,13 +418,132 @@ function notePreview(r) {
   return `<div class="npv"><span class="tag ${cls}">${label}</span><span class="npv-t" dir="auto">📝 ${esc(txt)}</span></div>`;
 }
 
+/* ---------- team activity + question timeline ---------- */
+const FEED_KEY = () => `feedSeen:${S.session?.user?.id}`;
+function ago(t) {
+  const d = new Date(t), s = (Date.now() - d.getTime()) / 1000;
+  const hm = d.toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
+  if (s < 60) return 'دلوقتي';
+  if (s < 3600) { const m = Math.max(1, Math.round(s / 60)); return m === 1 ? 'من دقيقة' : m === 2 ? 'من دقيقتين' : m <= 10 ? `من ${m} دقايق` : `من ${m} دقيقة`; }
+  if (s < 86400 && d.getDate() === new Date().getDate()) { const h = Math.round(s / 3600); return h === 1 ? 'من ساعة' : h === 2 ? 'من ساعتين' : h <= 10 ? `من ${h} ساعات` : `النهارده ${hm}`; }
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return `امبارح ${hm}`;
+  return `${d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })} ${hm}`;
+}
+function dayLabel(t) {
+  const d = new Date(t), y = new Date(); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === new Date().toDateString()) return 'النهارده';
+  if (d.toDateString() === y.toDateString()) return 'امبارح';
+  return d.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+const REQ_STATUS = { open: ['مفتوح', 'amber'], done: ['اتنفّذ', 'ok'], rejected: ['اترفض تنفيذه', 'warn'], cancelled: ['اتلغى', ''], closed: ['', ''] };
+// one event -> icon, who, what, extra lines
+function describe(ev, forList) {
+  const d = ev.detail || {}, who = ev.mine ? 'إنت' : (ev.actor || 'مراجع');
+  const clip = (x, n = 160) => x && x.length > n ? x.slice(0, n) + '…' : (x || '');
+  const out = { icon: '•', who, what: '', lines: [], badge: null, voice: null, cls: '' };
+  switch (ev.kind) {
+    case 'approved': Object.assign(out, { icon: '✅', what: 'اعتماد السؤال', cls: 'ok' });
+      if (d.student_note) out.lines.push(['ملاحظة للطلاب', d.student_note]);
+      if (d.status === 'cancelled') out.badge = ['اتلغى الاعتماد بعدين', ''];
+      break;
+    case 'requested': Object.assign(out, { icon: '✏️', what: `طلب تعديل${d.type_label ? `: ${d.type_label}` : ''}`, cls: 'cobalt' });
+      if (d.comment) out.lines.push(['المطلوب', forList ? clip(d.comment) : d.comment]);
+      if (d.transcript) out.lines.push(['نص الفويس', forList ? clip(d.transcript) : d.transcript]);
+      if (d.student_note) out.lines.push(['ملاحظة للطلاب', d.student_note]);
+      if (d.voice) out.voice = d.voice;
+      if (REQ_STATUS[d.status]?.[0]) out.badge = REQ_STATUS[d.status];
+      if (d.resolution && d.status === 'done' && !forList) out.lines.push(['رد Claude', d.resolution]);
+      break;
+    case 'commented': Object.assign(out, { icon: '💬', what: 'تعليق' }); if (d.comment) out.lines.push(['', d.comment]); break;
+    case 'quick_edit': Object.assign(out, { icon: '⚡', what: 'تعديل سريع', cls: 'cobalt' }); if (d.note) out.lines.push(['السبب', d.note]); break;
+    case 'note_added': Object.assign(out, { icon: '📝', what: 'ملاحظة للطلاب مع الاعتماد' }); if (d.student_note) out.lines.push(['', d.student_note]); break;
+    case 'claude_revised': Object.assign(out, { icon: '🤖', who: 'Claude', what: `نفّذ طلب ${d.request?.by || 'المراجع'}${d.request?.type_label ? ` (${d.request.type_label})` : ''}`, cls: 'cobalt' });
+      if (d.request?.resolution) out.lines.push(['اللي اتعمل', forList ? clip(d.request.resolution) : d.request.resolution]); break;
+    case 'request_cancelled': Object.assign(out, { icon: '↩️', what: 'إلغاء طلب التعديل', cls: 'warn' }); break;
+    case 'approval_undone': Object.assign(out, { icon: '↩️', what: `تراجع عن الاعتماد${d.approved_by && d.approved_by !== ev.actor ? ` (كان اعتماد ${d.approved_by})` : ''}`, cls: 'warn' }); break;
+    case 'quick_edit_undone': Object.assign(out, { icon: '↩️', what: `إلغاء تعديل سريع${d.edited_by && d.edited_by !== ev.actor ? ` لـ ${d.edited_by}` : ''}`, cls: 'warn' }); if (d.reason) out.lines.push(['سبب التعديل الملغي', d.reason]); break;
+    case 'claude_revision_rejected': Object.assign(out, { icon: '↩️', what: 'رفض تعديل Claude والرجوع للنسخة السابقة', cls: 'warn' }); break;
+    case 'returned_to_original': Object.assign(out, { icon: '⟲', what: 'رجوع السؤال لنسخته الأصلية', cls: 'warn' }); break;
+    case 'extracted': Object.assign(out, { icon: '📄', who: 'البداية', what: 'اتنقل السؤال من ملف المصدر' }); break;
+    case 'solved': Object.assign(out, { icon: '🤖', who: 'Claude', what: 'حل السؤال وكتب الشرح' }); break;
+    case 'updated': Object.assign(out, { icon: '🛠️', who: 'Claude', what: 'تحديث للنص' }); break;
+    default: out.what = ev.kind;
+  }
+  return out;
+}
+function lastLine(r) {
+  if (!r.last_kind) return '';
+  const e = describe({ kind: r.last_kind, actor: r.last_actor, mine: r.last_mine, detail: r.last_detail || {} }, true);
+  return `<div class="last ${e.cls}"><span aria-hidden="true">${e.icon}</span> <b>${esc(e.who)}</b>: ${esc(e.what)} <span class="muted">${esc(ago(r.last_at))}</span></div>`;
+}
+function evCard(ev, withQ) {
+  const e = describe(ev, withQ);
+  const lines = e.lines.map(([k, v]) => `<div class="evl">${k ? `<span class="evk">${esc(k)}:</span> ` : ''}<span dir="auto">${nl(v)}</span></div>`).join('');
+  return `<li class="ev ${e.cls}">
+    <span class="evi" aria-hidden="true">${e.icon}</span>
+    <div class="evb">
+      <div class="evh"><b>${esc(e.who)}</b> <span>${esc(e.what)}</span>${e.badge && e.badge[0] ? ` <span class="tag ${e.badge[1]}">${esc(e.badge[0])}</span>` : ''}</div>
+      ${lines}
+      ${e.voice ? `<audio class="audio" controls preload="none" data-voice="${esc(e.voice)}"></audio>` : ''}
+      <div class="evt">${withQ ? `<a href="#q/${ev.qid}" class="evq">سؤال ${esc(ev.qid_display)}</a> · ` : ''}<time datetime="${esc(ev.at)}">${esc(ago(ev.at))}</time></div>
+    </div></li>`;
+}
+function timelineHTML(tl, open) {
+  if (!tl || !tl.length) return '';
+  return `<details class="tl" ${open ? 'open' : ''}><summary>🕘 تاريخ السؤال (${tl.length === 1 ? 'خطوة واحدة' : tl.length === 2 ? 'خطوتين' : tl.length <= 10 ? `${tl.length} خطوات` : `${tl.length} خطوة`})</summary>
+    <ol class="evs timeline">${tl.slice().reverse().map(ev => evCard(ev, false)).join('')}</ol></details>`;
+}
+
+async function renderActivity(more) {
+  stopSolverTimer(); closeSheets(); S.bundle = null; S.qid = null;
+  if (!more) { $app.innerHTML = '<div class="loading">جاري تحميل نشاط الفريق…</div>'; S.feed = []; S.feedEnd = false; }
+  const before = more && S.feed.length ? S.feed[S.feed.length - 1].at : null;
+  const rows = await rpc('team_activity', { p_limit: 150, p_before: before });
+  S.feed = more ? S.feed.concat(rows || []) : (rows || []);
+  if (!rows || rows.length < 150) S.feedEnd = true;
+  const lastSeen = localStorage.getItem(FEED_KEY()) || new Date(Date.now() - 7 * 864e5).toISOString();
+  try { localStorage.setItem(FEED_KEY(), new Date().toISOString()); } catch { }
+  S.newCount = 0;
+  drawActivity(lastSeen);
+}
+function drawActivity(lastSeen) {
+  const F = S.feedFilter || (S.feedFilter = { who: 'all', kind: 'all' });
+  const people = [...new Set(S.feed.filter(e => !e.mine && e.actor && !['claude_revised'].includes(e.kind)).map(e => e.actor))];
+  const KINDS = { all: 'كل الأحداث', approved: 'الاعتماد', requested: 'طلبات التعديل', quick_edit: 'التعديل السريع', claude: 'تنفيذ Claude', back: 'الرجوع والإلغاء' };
+  const kindOk = e => F.kind === 'all' || (F.kind === 'claude' ? e.kind === 'claude_revised' : F.kind === 'back' ? /undone|cancelled|rejected|original/.test(e.kind) : e.kind === F.kind);
+  const whoOk = e => F.who === 'all' || (F.who === 'others' ? !e.mine : F.who === 'me' ? e.mine : e.actor === F.who && !e.mine);
+  const list = S.feed.filter(e => kindOk(e) && whoOk(e));
+  let html = '', day = '';
+  for (const e of list) {
+    const dl = dayLabel(e.at);
+    if (dl !== day) { if (day) html += '</ol>'; html += `<h3 class="dayh">${esc(dl)}</h3><ol class="evs">`; day = dl; }
+    html += evCard(e, true).replace('<li class="ev', `<li class="ev${lastSeen && !e.mine && e.at > lastSeen ? ' fresh' : ''}`);
+  }
+  if (day) html += '</ol>';
+  $app.innerHTML = topBar(`<button class="linkbtn" id="back">→ القائمة</button><span class="grow"></span><span class="brand">نشاط الفريق</span>`) + `
+  <main class="wrap">
+    <p class="small muted" style="margin-top:0">كل اللي اتعمل على الأسئلة اللي ليك صلاحية عليها، الأحدث فوق. اضغط رقم السؤال عشان تفتحه.</p>
+    <div class="chips" aria-label="مين">${[['all', 'الكل'], ['others', 'غيري'], ['me', 'أنا'], ...people.map(p => [p, p])].map(([k, l]) => `<button class="chip" data-who="${esc(k)}" aria-pressed="${F.who === k}">${esc(l)}</button>`).join('')}</div>
+    <div class="chips" aria-label="نوع الحدث">${Object.entries(KINDS).map(([k, l]) => `<button class="chip" data-kind="${k}" aria-pressed="${F.kind === k}">${l}</button>`).join('')}</div>
+    ${list.length ? html : `<div class="empty">مفيش نشاط${F.who !== 'all' || F.kind !== 'all' ? ' بالتصفية دي' : ' لسه'}.</div>`}
+    ${S.feedEnd ? '' : `<p><button class="btn block" id="more">عرض أقدم</button></p>`}
+  </main>`;
+  document.getElementById('back').onclick = () => { location.hash = ''; };
+  $app.querySelectorAll('[data-who]').forEach(b => b.onclick = () => { F.who = b.dataset.who; drawActivity(lastSeen); });
+  $app.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { F.kind = b.dataset.kind; drawActivity(lastSeen); });
+  const m = document.getElementById('more'); if (m) m.onclick = () => renderActivity(true);
+  $app.querySelectorAll('audio[data-voice]').forEach(a => a.addEventListener('play', async () => { if (!a.src) { const u = await signed('voice-notes', a.dataset.voice); if (u) { a.src = u; a.play(); } } }, { once: true }));
+}
+
 /* ---------- question ---------- */
 async function openQuestion(qid) {
   stopSolverTimer(); closeSheets();
   if (!S.rows.length && !S.notices.length) await loadQueue();
   if (!S.bundle || S.qid !== qid) $app.innerHTML = '<div class="loading">جاري تحميل السؤال…</div>';
-  const b = await rpc('question_bundle', { p_qid: qid });
+  const [b, tl] = await Promise.all([rpc('question_bundle', { p_qid: qid }), rpc('question_timeline', { p_qid: qid }).catch(() => null)]);
   if (!b) throw new Error('هذا السؤال غير متاح لك.');
+  S.timeline = tl || [];
   S.bundle = b; S.qid = qid; S.showExtra = false;
   const nd = Drafts.get(qid, 'approve_note'); S.noteDraft = nd?.payload?.note || ''; S.noteOpen = !!nd;
   renderQuestion(); scrollTo(0, 0);
@@ -546,16 +670,7 @@ function renderQuestion() {
     <section class="panel hand"><h3>${HAND_LABEL}</h3><div class="pre" dir="auto">${esc(q.handwritten_note)}</div>
       ${q.handwritten_image_path ? `<img id="handimg" alt="صورة الملاحظة الأصلية" style="max-width:100%;margin-top:10px;border-radius:8px">` : ''}</section>` : '';
   const studentNote = v.student_note ? `<section class="panel"><h3>ملاحظة للطلاب (تظهر في التطبيق)</h3><div class="pre" dir="auto">${T(v.student_note, base?.student_note)}</div></section>` : '';
-  const shown = (b.reviews || []).filter(r => r.status !== 'open');
-  const hist = shown.length ? `<details class="hist"><summary>سجل المراجعة (${shown.length})</summary>
-    ${shown.map(r => `<div class="hitem"><b>${esc(r.reviewer_name || '—')}</b> <span class="small muted">جولة ${r.round}، ${new Date(r.created_at).toLocaleString('ar-EG')}</span>
-      <div>${esc(DECISION_AR[r.decision] || r.decision)}${r.revision_type ? `: ${esc(labelType(r.revision_type))}` : ''}${r.status === 'cancelled' ? ' <span class="tag">أُلغي</span>' : ''}</div>
-      ${r.comment_internal ? `<div class="pre">${esc(r.comment_internal)}</div>` : ''}
-      ${r.voice_transcript ? `<div class="pre"><span class="muted">الفويس:</span> ${esc(r.voice_transcript)}</div>` : ''}
-      ${r.voice_path ? `<audio class="audio" controls preload="none" data-voice="${esc(r.voice_path)}"></audio>` : ''}
-      ${r.resolution_note ? `<div class="pre"><span class="muted">الرد:</span> ${esc(r.resolution_note)}</div>` : ''}
-    </div>`).join('')}</details>` : '';
-
+  const hist = timelineHTML(S.timeline, q.status === 'approved');
   // action bar by state
   let bar = '';
   const qe = access >= 3 ? `<button class="btn sec" id="qe">⚡ ${dQe ? 'أكمل التعديل السريع' : 'تعديل سريع'}</button>` : '';
@@ -1111,7 +1226,15 @@ const IS_MAC = /Macintosh/.test(UA) && !IS_IOS;
 const BROWSER = /SamsungBrowser/.test(UA) ? 'samsung' : /FxiOS|Firefox/.test(UA) ? 'firefox' : /EdgA?\//.test(UA) ? 'edge' : /CriOS/.test(UA) ? 'chrome-ios' : /Chrome/.test(UA) ? 'chrome' : /Safari/.test(UA) ? 'safari' : 'other';
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; document.querySelectorAll('[data-install-now]').forEach(b => b.classList.remove('hidden')); });
 window.addEventListener('appinstalled', () => { installEvt = null; closeSheets(); notify('تم تثبيت التطبيق بفضل الله', 'هتلاقي أيقونة "مراجعة OOC" على الشاشة الرئيسية.'); document.querySelectorAll('.install-card,#install').forEach(x => x.remove()); });
-function installBtn() { return isStandalone() ? '' : `<button class="install" id="install" type="button" aria-label="أضف التطبيق للشاشة الرئيسية">📲 <span class="who">ثبّت التطبيق</span></button>`; }
+function installBtn() {
+  const inst = isStandalone();
+  return `<button class="install" id="install" type="button" aria-label="${inst ? 'شرح تثبيت التطبيق' : 'أضف التطبيق للشاشة الرئيسية'}">📲 <span class="who">${inst ? 'التثبيت' : 'ثبّت التطبيق'}</span></button>`;
+}
+// bottom-of-list card: always available, also for sharing the app with colleagues
+function installListCard() {
+  const inst = isStandalone();
+  return `<button class="install-card list-card" type="button" data-open-install><img src="/icon-192.png" alt=""><div><b>📲 ${inst ? 'تثبيت التطبيق على جهاز تاني، أو شرحه لزميل' : 'أضف التطبيق للشاشة الرئيسية'}</b><span>شرح خطوة بخطوة لأندرويد والكمبيوتر والآيفون، وزرار تبعت بيه الرابط والطريقة لزمايلك.</span></div></button>`;
+}
 function installCard() {
   if (isStandalone()) return '';
   return `<button class="install-card" type="button" data-open-install><img src="/icon-192.png" alt=""><div><b>📲 أضف التطبيق للشاشة الرئيسية</b><span>يفتح بضغطة زي أي تطبيق، وبشاشة كاملة. أندرويد، كمبيوتر، أو آيفون.</span></div></button>`;
@@ -1184,10 +1307,14 @@ function installTab(tab) {
 function openInstall() {
   const def = IS_IOS || IS_MAC ? 'apple' : IS_ANDROID ? 'android' : 'desktop';
   const tabs = [['android', 'أندرويد'], ['desktop', 'ويندوز / كمبيوتر'], ['apple', 'آيفون / أبل']];
-  const body = isStandalone()
-    ? `<div class="installed"><span class="ic" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--ok);color:#fff">✓</span><div>التطبيق مثبت بالفعل، وإنت فاتحه دلوقتي من الشاشة الرئيسية.</div></div>`
-    : `<div class="ptabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-ptab="${k}" aria-selected="${k === def}">${l}</button>`).join('')}</div><div id="ptab-body">${installTab(def)}</div>
-       <p class="small muted" style="margin:6px 0 0">أسماء القوائم ممكن تختلف شوية حسب نسخة المتصفح.</p>`;
+  const inst = isStandalone();
+  const body = `${inst ? `<div class="installed"><span class="ok-dot" aria-hidden="true">✓</span><div><b>التطبيق مثبت على جهازك بفضل الله</b><div class="small muted">الشرح تحت لو عايز تثبته على جهاز تاني أو تشرحه لزميل.</div></div></div>` : ''}
+    <div class="share-box">
+      <div><b>ابعت التطبيق لزميل</b><div class="small muted">الرابط ومعاه طريقة التثبيت في رسالة واحدة.</div></div>
+      <button class="btn primary" type="button" id="share-app">↗️ مشاركة</button>
+    </div>
+    <div class="ptabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-ptab="${k}" aria-selected="${k === def}">${l}</button>`).join('')}</div><div id="ptab-body">${installTab(def)}</div>
+    <p class="small muted" style="margin:6px 0 0">أسماء القوائم ممكن تختلف شوية حسب نسخة المتصفح.</p>`;
   const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📲 أضف التطبيق للشاشة الرئيسية</h2>
     <p class="hint" style="margin-top:4px">بعدها يفتح بضغطة من أيقونة "مراجعة OOC"، بشاشة كاملة من غير شريط المتصفح.</p></div>${body}
     <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
@@ -1197,7 +1324,17 @@ function openInstall() {
     sheet.querySelector('#ptab-body').innerHTML = installTab(b.dataset.ptab); bindNow();
   });
   sheet.querySelector('[data-close]').onclick = () => close();
+  sheet.querySelector('#share-app').onclick = shareApp;
   bindNow();
+}
+async function shareApp() {
+  const url = location.origin + '/';
+  const text = `تطبيق مراجعة بنك الأسئلة – OOC\n${url}\n\nطريقة التثبيت:\n• أندرويد (كروم): افتح الرابط، واضغط "📲 ثبّت التطبيق"، أو من قائمة كروم ⋮ اختار "إضافة إلى الشاشة الرئيسية".\n• آيفون (سفاري): افتح الرابط، واضغط زر المشاركة، ثم "إضافة إلى الشاشة الرئيسية".\n• كمبيوتر (كروم أو إيدج): أيقونة التثبيت في آخر شريط العنوان.`;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'مراجعة OOC', text }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(text); } catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  notify('تم نسخ الرابط وطريقة التثبيت بفضل الله', 'الصقهم في واتساب أو أي رسالة لزميلك.');
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => { }));
