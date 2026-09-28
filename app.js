@@ -7,11 +7,11 @@ const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل مع�
 const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '3.9';
-const APP_BUILD = '27/9/2026';
+const APP_VERSION = '4.7';
+const APP_BUILD = '28/9/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-const S = { session: null, profile: null, isAdmin: false, rows: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false };
+const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
 const $app = document.getElementById('app');
 
 /* ---------- helpers ---------- */
@@ -70,6 +70,11 @@ const fail = e => notify('لم يتم الإجراء', errText(e), 'err', 6000);
 function errText(e) {
   const m = (e && (e.message || e.error_description || e.msg)) || String(e);
   if (/Not allowed/i.test(m)) return 'ليست لديك صلاحية على هذا السؤال.';
+  // 4.1: decide_duplicate / undo_duplicate (migration 037)
+  if (/Not your duplicate decision/i.test(m)) return 'القرار ده أخده مراجع تاني، والتراجع عنه لصاحبه أو للإدارة.';
+  if (/Duplicate already decided/i.test(m)) return 'الزوج ده اتاخد فيه قرار بالفعل. حدّث الصفحة.';
+  if (/Duplicate questions not solved yet/i.test(m)) return 'القرار بيتاخد بعد ما السؤالين يتحلّوا.';
+  if (/Duplicate suggestion not found/i.test(m)) return 'الاقتراح ده مش موجود دلوقتي. حدّث الصفحة.';
   if (/Invalid login credentials/i.test(m)) return 'البريد أو كلمة السر غير صحيحة.';
   if (/Email not confirmed/i.test(m)) return 'البريد لم يُؤكَّد بعد. افتح رسالة التأكيد في بريدك ثم سجّل الدخول.';
   if (/User already registered/i.test(m)) return 'هذا البريد مسجّل بالفعل. استخدم تسجيل الدخول.';
@@ -225,7 +230,7 @@ async function onSession(session) {
 }
 
 /* ---------- drafts: saved on every keystroke (device) + synced to the account (server) ---------- */
-// kinds: request (new revision request) · edit_request (changes to my open request) · quick_edit · approve_note
+// kinds: request (new revision request) · edit_request (changes to my open request) · quick_edit · approve_note · rebuild (4.0: rebuild screen, migration 036)
 const DRAFT_LABEL = { request: 'طلب تعديل لم يُرسل', edit_request: 'تعديلات على طلبك لم تُحفظ', quick_edit: 'تعديل سريع لم يُحفظ', approve_note: 'ملاحظة للطلاب لم تُنشر' };
 const Drafts = {
   cache: {}, timers: {}, listeners: new Set(),
@@ -328,6 +333,7 @@ function draftAge(d) {
 /* ---------- data ---------- */
 const FOLDERS = [
   { id: 'todo', label: 'تنتظرك', test: r => r.status === 'in_review' || r.status === 'revised' },
+  { id: 'rebuild', label: 'محتاجة إعادة تركيب 🛠️', test: () => false },   // 4.0 (backlog 30): unsolved questions from rebuild_queue, not reviewer_questions
   { id: 'drafts', label: 'مسودات لم تُرسل', test: r => Drafts.qids().has(r.qid) },
   { id: 'new', label: 'لم تُفتح', test: r => r.status === 'in_review' && !r.seen },
   { id: 'seen', label: 'فُتحت بلا قرار', test: r => r.status === 'in_review' && r.seen },
@@ -337,6 +343,7 @@ const FOLDERS = [
   { id: 'notes', label: 'ملاحظات للطلاب', test: r => !!r.note_state },
   { id: 'approved', label: 'معتمدة', test: r => r.status === 'approved' },
   { id: 'alerts', label: 'فيها تنبيه ⚠️', test: r => !!(r.alert_kinds && r.alert_kinds.length) },   // 3.9: "⚠️ للمراجع" block (backlog 24); kept before 'all' so navigation inside folders is unchanged
+  { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the chip shows only when it has questions
   { id: 'all', label: 'الكل', test: () => true },
 ];
 const SORTS = { priority: 'الأولوية (المختلف والأقل ثقة أولًا)', id_asc: 'رقم السؤال: تصاعدي', id_desc: 'رقم السؤال: تنازلي', conf_low: 'الثقة: الأقل أولًا', conf_high: 'الثقة: الأعلى أولًا' };
@@ -344,15 +351,59 @@ const CONF_RANK = { low: 0, medium: 1, high: 2 };
 const VIEW_KEY = () => `view:${S.session?.user?.id}`;
 function loadView() {
   let v = {}; try { v = JSON.parse(localStorage.getItem(VIEW_KEY()) || '{}'); } catch { }
-  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, showFilters: false, ...v };
+  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all', showFilters: false, ...v };
 }
 function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.view)); } catch { } }
-function listFor(view = S.view) {
-  const f = FOLDERS.find(x => x.id === view.folder) || FOLDERS[0];
-  let rows = S.rows.filter(f.test);
-  if (view.conf !== 'all') rows = rows.filter(r => r.ai_confidence === view.conf);
+/* 4.1: two more list filters, in the interface only (integration_backlog 31, 32).
+   31 – chapter: the chapters that have at least one question students can see now (student_state 'ai' or 'reviewed'),
+        worked out from reviewer_questions, so a chapter that opens for students shows up by itself. One choice.
+   32 – hidden from students: any student_state that starts with "hidden_", with a sub-filter per kind that exists now,
+        so a new hidden kind shows up by itself.
+   Counts next to each choice = questions in the open folder that pass the other filters. The "rebuild" folder ignores them. */
+const NO_FILTERS = { conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all' };
+const VISIBLE_STATES = new Set(['ai', 'reviewed']);
+const isHidden = r => String(r.student_state || '').startsWith('hidden_');
+const HIDDEN_SHORT = { hidden_disagree: 'اختلاف مع المصدر', hidden_low_confidence: 'ثقة منخفضة', hidden_incomplete: 'ناقص', hidden_completed: 'اختياراته من المراجع', hidden_no_source: 'المصدر من غير إجابة', hidden_answer_fix: 'لحد تصليح الإجابة', hidden_admin: 'بقرار الإدارة', hidden_archived: 'مؤرشف' };
+const hiddenLabel = k => HIDDEN_SHORT[k] || String(k).replace(/^hidden_/, '').replace(/_/g, ' ');
+function countBy(rows, key) { const o = {}; for (const r of rows) { const k = key(r); o[k] = (o[k] || 0) + 1; } return o; }
+function chapterList() { return [...new Set(S.rows.filter(r => r.chapter && VISIBLE_STATES.has(r.student_state)).map(r => r.chapter))].sort((a, b) => a.localeCompare(b)); }
+function hiddenKinds() {
+  const order = Object.keys(STUDENT_STATE), rank = k => { const i = order.indexOf(k); return i < 0 ? 999 : i; };
+  return [...new Set(S.rows.filter(isHidden).map(r => r.student_state))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+// a saved chapter or hidden kind that is not in the lists any more goes back to "الكل"
+function fixView() {
+  const v = S.view; if (!v) return;
+  let changed = false;
+  if (v.chapter && v.chapter !== 'all' && !chapterList().includes(v.chapter)) { v.chapter = 'all'; changed = true; }
+  if (v.hiddenKind && v.hiddenKind !== 'all' && !hiddenKinds().includes(v.hiddenKind)) { v.hiddenKind = 'all'; changed = true; }
+  if (changed) saveView();
+}
+function applyFilters(rows, view, skip) {
+  if (view.conf && view.conf !== 'all') rows = rows.filter(r => r.ai_confidence === view.conf);
   if (view.disagree) rows = rows.filter(r => r.match_status === 'disagree');
   if (view.incomplete) rows = rows.filter(r => r.is_incomplete);
+  if (skip !== 'chapter' && view.chapter && view.chapter !== 'all') rows = rows.filter(r => r.chapter === view.chapter);
+  if (skip !== 'hidden' && view.hidden) rows = rows.filter(r => isHidden(r) && (!view.hiddenKind || view.hiddenKind === 'all' || r.student_state === view.hiddenKind));
+  return rows;
+}
+function facetHTML(v) {
+  const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
+  const chRows = applyFilters(inFolder, v, 'chapter'), chN = countBy(chRows, r => r.chapter), chapters = chapterList();
+  const chip = (attr, k, label, n, on) => `<button class="chip" aria-pressed="${on}" ${attr}="${esc(k)}"><bdi>${esc(label)}</bdi><span class="n">${n}</span></button>`;
+  const ch = chapters.length ? `<div class="lbl">الشابتر (الظاهر للطلاب)</div>
+      <div class="chips" style="padding-bottom:4px" aria-label="الشابتر">${chip('data-chapter', 'all', 'الكل', chRows.length, v.chapter === 'all')}${chapters.map(c => chip('data-chapter', c, c, chN[c] || 0, v.chapter === c)).join('')}</div>` : '';
+  let hid = '';
+  if (v.hidden) {
+    const hRows = applyFilters(inFolder, v, 'hidden').filter(isHidden), hN = countBy(hRows, r => r.student_state), hk = v.hiddenKind || 'all';
+    hid = `<div class="chips sub" aria-label="نوع المخفي">${chip('data-hkind', 'all', 'كل المخفي', hRows.length, hk === 'all')}${hiddenKinds().map(k => chip('data-hkind', k, hiddenLabel(k), hN[k] || 0, hk === k)).join('')}</div>`;
+  }
+  return { ch, hid };
+}
+function listFor(view = S.view) {
+  if (view.folder === 'rebuild') return [...(S.rebuild || [])];   // already ordered by number; sorting and filters do not apply
+  const f = FOLDERS.find(x => x.id === view.folder) || FOLDERS[0];
+  let rows = applyFilters(S.rows.filter(f.test), view);
   const cr = r => CONF_RANK[r.ai_confidence] ?? 1;
   const by = {
     priority: (a, b) => a.priority - b.priority || a.qid - b.qid,
@@ -365,19 +416,59 @@ async function loadQueue() {
   if (!S.draftsLoaded) { Drafts.load(); S.draftsLoaded = true; }
   const since = localStorage.getItem(FEED_KEY()) || new Date(Date.now() - 7 * 864e5).toISOString();
   rpc('team_activity_new_count', { p_since: since }).then(n => { S.newCount = n || 0; const bd = document.getElementById('feed-n'); if (bd) { bd.textContent = S.newCount; bd.classList.toggle('hidden', !S.newCount); } }).catch(() => { });
-  const tasks = [rpc('reviewer_questions'), rpc('reviewer_notices'), Drafts.pull()];
+  const rb = rpc('rebuild_queue').catch(() => []);   // empty for anyone below access 3
+  const tasks = [rpc('reviewer_questions'), rpc('reviewer_notices'), Drafts.pull(), loadStudentUrl()];
   if (S.isAdmin) tasks.push(rpc('pipeline_status').catch(() => null));
-  const [q, n, , p] = await Promise.all(tasks);
+  const [q, n, , , p] = await Promise.all(tasks);
   S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
   S.queue = S.rows.filter(FOLDERS[0].test);
+  S.rebuild = (await rb) || [];
+  fixView();
+}
+/* 4.7 (backlog 28): the student app link comes from settings.student_app_url (RLS lets any active reviewer read settings),
+   never from the code, so a new domain needs no app update. The row itself is the switch: it is added (migration 038) only
+   after the student app version with direct links (8.9) is live, and while it is missing the button stays hidden.
+   Read with the queue, at most every 10 minutes; any failure keeps the last good value (or none). */
+async function loadStudentUrl() {
+  if (S.studentUrlAt && Date.now() - S.studentUrlAt < 10 * 60000) return;
+  try {
+    const { data, error } = await sb.from('settings').select('value').eq('key', 'student_app_url').maybeSingle();
+    if (error) return;
+    S.studentUrlAt = Date.now();
+    S.studentUrl = safeStudentBase(data && data.value);
+  } catch { }
+}
+function safeStudentBase(v) {
+  if (typeof v !== 'string' || !v.trim()) return null;
+  try {
+    const u = new URL(v.trim());
+    if (u.protocol !== 'https:' || u.username || u.password) return null;
+    u.search = ''; u.hash = '';
+    return u.href;
+  } catch { return null; }
+}
+/* Same link shape in both apps: <student_app_url>/?q=<qid_display>, e.g. https://newday-app.onrender.com/?q=000112 */
+function studentLink(qidDisplay) {
+  if (!S.studentUrl || !/^\d{1,9}$/.test(String(qidDisplay || ''))) return '';
+  const u = new URL(S.studentUrl);
+  u.searchParams.set('q', String(qidDisplay));
+  return u.href;
+}
+/* Question page: the students' line, and next to it the button – only while students can see the question. */
+function studentRowHTML(b, q) {
+  const line = studentLine(b.student_state, true);
+  const href = VISIBLE_STATES.has(b.student_state) ? studentLink(q.qid_display) : '';
+  if (!href) return line;
+  return `<div class="svrow">${line}<a class="svlink" id="open-student" href="${esc(href)}" target="_blank" rel="noopener noreferrer">👁️ افتحه في تطبيق الطلاب</a></div>`;
 }
 async function route() {
   if (!S.view) S.view = loadView();
   const m = location.hash.match(/^#q\/(\d+)/);
   try {
-    const rm = location.hash.match(/^#report\/(\d+)/);
+    const rm = location.hash.match(/^#report\/(\d+)/), bm = location.hash.match(/^#rebuild\/(\d+)/);
     if (location.hash === '#activity') { if (!S.rows.length) await loadQueue(); await renderActivity(false); }
     else if (rm) await renderBatchReport(Number(rm[1]));
+    else if (bm) await renderRebuild(Number(bm[1]));
     else if (m) await openQuestion(Number(m[1]));
     else {
       closeSheets();
@@ -390,8 +481,9 @@ async function route() {
 }
 let lastHash = location.hash;
 window.addEventListener('hashchange', () => {
-  if (!lastHash.startsWith('#q/') && !lastHash.startsWith('#report/') && lastHash !== '#activity' && location.hash.startsWith('#q/')) S.listScroll = scrollY;   // leaving the list
-  if (!location.hash) { /* back to list keeps listScroll */ } else if (!location.hash.startsWith('#q/') && !location.hash.startsWith('#report/')) S.listScroll = 0;
+  const inQ = h => h.startsWith('#q/') || h.startsWith('#rebuild/');
+  if (!inQ(lastHash) && !lastHash.startsWith('#report/') && lastHash !== '#activity' && inQ(location.hash)) S.listScroll = scrollY;   // leaving the list
+  if (!location.hash) { /* back to list keeps listScroll */ } else if (!inQ(location.hash) && !location.hash.startsWith('#report/')) S.listScroll = 0;
   lastHash = location.hash;
   if (S.session && S.profile?.is_active) route();
 });
@@ -414,6 +506,8 @@ function reasonTags(r, showStatus) {
   if (r.ai_confidence) t.push(`<span class="tag ${r.ai_confidence === 'low' ? 'amber' : ''}">ثقة ${esc(CONF[r.ai_confidence] || r.ai_confidence)}</span>`);
   if (r.is_incomplete) t.push('<span class="tag amber">ناقص في المصدر</span>');
   t.push(alertTags(r.alert_kinds, r.is_incomplete));
+  if (r.dup_linked) t.push(`<span class="tag dup-l">🔁 مكرر مع <bdi>${esc(r.dup_with || '')}</bdi></span>`);   // 4.1 (backlog 29)
+  if (r.dup_pending) t.push(`<span class="tag dup-p">🔁 محتمل مكرر${r.dup_pending > 1 ? ` (${r.dup_pending})` : ''}</span>`);
   if (r.status === 'revised' && r.last_edit_label === 'reviewer_quick_edit') t.push(`<span class="tag cobalt">⚡ عدّله سريعًا${r.last_edit_by ? ': ' + esc(r.last_edit_by) : ''}</span>`);
   else if (r.status === 'revised') t.push(`<span class="tag cobalt">جولة ${(r.rounds || 1) + 1}</span>`);
   if (Drafts.qids().has(r.qid)) t.push('<span class="tag amber">📝 مسودة لم تُرسل</span>');
@@ -422,12 +516,15 @@ function reasonTags(r, showStatus) {
   return t.join('');
 }
 function renderQueue() {
-  S.bundle = null; S.qid = null; closeSheets();
+  S.bundle = null; S.qid = null; S.navHold = null; closeSheets();
   const v = S.view, list = listFor();
   const counts = Object.fromEntries(FOLDERS.map(f => [f.id, S.rows.filter(f.test).length]));
-  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete;
+  counts.rebuild = (S.rebuild || []).length;
+  const isRb = v.folder === 'rebuild';
+  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + (v.chapter !== 'all') + !!v.hidden;
+  const fx = !isRb && v.showFilters ? facetHTML(v) : { ch: '', hid: '' };
   const shown = list.slice(0, S.listLimit || 60);
-  const items = shown.map(r => `<li><a href="#q/${r.qid}">
+  const items = isRb ? shown.map(rbItem).join('') : shown.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
       <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${studentLine(r.student_state)}${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
     </a></li>`).join('');
@@ -435,24 +532,28 @@ function renderQueue() {
   <main class="wrap">
     ${staffCard()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
-    <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" pattern="[0-9]*" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
-    <div class="chips" role="tablist" aria-label="الفولدرات">${FOLDERS.filter(f => f.id !== 'drafts' || counts.drafts || v.folder === 'drafts').map(f => `<button class="chip" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}">${f.label}<span class="n">${counts[f.id]}</span></button>`).join('')}</div>
-    <div class="tools">
+    <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
+    <div class="chips" role="tablist" aria-label="الفولدرات">${FOLDERS.filter(f => (f.id !== 'drafts' || counts.drafts || v.folder === 'drafts') && (f.id !== 'rebuild' || counts.rebuild || isRb) && (f.id !== 'dups' || counts.dups || v.folder === 'dups')).map(f => `<button class="chip" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}">${f.label}<span class="n">${counts[f.id]}</span></button>`).join('')}</div>
+    ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn" id="tog-f" aria-expanded="${v.showFilters}">تصفية${activeFilters ? ` (${activeFilters})` : ''}</button>
     </div>
     ${v.showFilters ? `<div class="filters">
       <div class="lbl">درجة ثقة Claude</div>
       <div class="chips" style="padding-bottom:4px">${[['all', 'الكل'], ['high', 'عالية'], ['medium', 'متوسطة'], ['low', 'منخفضة']].map(([k, l]) => `<button class="chip" aria-pressed="${v.conf === k}" data-conf="${k}">${l}</button>`).join('')}</div>
+      ${fx.ch}
       <div class="chips" style="padding-bottom:0">
         <button class="chip" aria-pressed="${v.disagree}" id="f-dis">المختلف مع المصدر فقط</button>
         <button class="chip" aria-pressed="${v.incomplete}" id="f-inc">الناقص فقط</button>
-        ${activeFilters ? '<button class="chip" id="f-clear">مسح التصفية</button>' : ''}
-      </div></div>` : ''}
+        <button class="chip" aria-pressed="${!!v.hidden}" id="f-hid">المخفي عن الطلاب فقط</button>
+      </div>
+      ${fx.hid}
+      ${activeFilters ? '<div class="chips" style="padding:8px 0 0"><button class="chip" id="f-clear">مسح التصفية</button></div>' : ''}
+    </div>` : ''}`}
     <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
-      <p style="margin-top:16px"><a class="btn primary block" href="#q/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
-      : `<div class="empty"><p>لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.</p><button class="btn" id="refresh">تحديث</button></div>`}
+      <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
+      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
     ${installListCard()}
     ${appFooter()}
   </main>`;
@@ -464,15 +565,20 @@ function renderQueue() {
   const set = patch => { Object.assign(S.view, patch); saveView(); S.listLimit = 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
   $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => set({ folder: b.dataset.folder }));
   $app.querySelectorAll('[data-conf]').forEach(b => b.onclick = () => set({ conf: b.dataset.conf }));
-  document.getElementById('sort').onchange = e => set({ sort: e.target.value });
-  document.getElementById('tog-f').onclick = () => set({ showFilters: !v.showFilters });
+  const so = document.getElementById('sort'); if (so) so.onchange = e => set({ sort: e.target.value });
+  const tf = document.getElementById('tog-f'); if (tf) tf.onclick = () => set({ showFilters: !v.showFilters });
   const fd = document.getElementById('f-dis'); if (fd) fd.onclick = () => set({ disagree: !v.disagree });
   const fi = document.getElementById('f-inc'); if (fi) fi.onclick = () => set({ incomplete: !v.incomplete });
-  const fc = document.getElementById('f-clear'); if (fc) fc.onclick = () => set({ conf: 'all', disagree: false, incomplete: false });
+  const fh = document.getElementById('f-hid'); if (fh) fh.onclick = () => set({ hidden: !v.hidden, hiddenKind: 'all' });
+  $app.querySelectorAll('[data-chapter]').forEach(b => b.onclick = () => set({ chapter: b.dataset.chapter }));
+  $app.querySelectorAll('[data-hkind]').forEach(b => b.onclick = () => set({ hiddenKind: b.dataset.hkind }));
+  const fc = document.getElementById('f-clear'); if (fc) fc.onclick = () => set({ ...NO_FILTERS });
   document.getElementById('goto').onsubmit = ev => {
     ev.preventDefault();
-    const n = parseInt(document.getElementById('goto-n').value, 10);
+    const m = String(document.getElementById('goto-n').value || '').match(/\d+/);   // 4.7: also "Q ID 000112" pasted from the student app
+    const n = m ? parseInt(m[0], 10) : 0;
     if (!n) return toast('اكتب رقم السؤال.');
+    if ((S.rebuild || []).some(x => x.qid === n)) { location.hash = `#rebuild/${n}`; return; }   // still unsolved, waiting for a rebuild
     if (!S.rows.some(x => x.qid === n)) notify(`السؤال رقم ${n} مش ضمن فولدراتك`, 'هحاول أفتحه لو عندك صلاحية عليه.', 'info');
     location.hash = `#q/${n}`;
   };
@@ -491,6 +597,7 @@ const STUDENT_STATE = {
   hidden_low_confidence: ['مخفي – ثقة Claude منخفضة، محتاج اعتمادك', 'wait'],
   hidden_no_source: ['مخفي – المصدر من غير إجابة، محتاج اعتمادك', 'wait'],
   hidden_incomplete: ['مخفي – سؤال ناقص، محتاج قرارك', 'wait'],
+  hidden_completed: ['مخفي – اختياراته من المراجع، محتاج اعتمادك', 'wait'],   // 4.0 (migration 035)
   hidden_answer_fix: ['مخفي – لحد تصليح الإجابة', 'fix'],
   hidden_admin: ['مخفي بقرار الإدارة', 'off'],
   hidden_archived: ['مخفي – مؤرشف', 'off'],
@@ -552,6 +659,112 @@ function alertCardHTML(al, src) {
     </section>`;
 }
 
+/* ---------- 4.1: similar questions (integration_backlog 29, migration 037) ----------
+   The database pairs solved questions whose stem + options are at least 75% alike (pg_trgm, settings.duplicate_similarity_min),
+   plus the pairs the extraction chat marked "similar" at a lower score (source = 'extraction').
+   The reviewer decides: "مكرر" = both stay visible to students and each is linked to the other (not a merge),
+   "مش مكرر" = the pair is closed for good. The undo button sits on the card, not in the question's "رجوع" menu,
+   because the decision belongs to the pair, not to one version of one question.
+   question_bundle.duplicates (question_duplicates): pending pairs first; can_decide needs access 2 on both questions;
+   can_undo is for the reviewer who decided, or an admin. Nothing here reaches students yet (that is backlog 33). */
+const pct = s => (s == null || s === '' || !Number.isFinite(Number(s))) ? '' : `${Math.round(Number(s) * 100)}%`;
+function dupCardHTML(d) {
+  const o = d.other || {}, id = Number(d.id), st = d.status;
+  let foot;
+  if (st === 'pending') foot = d.can_decide
+    ? `<div class="dup-btns"><button class="btn sec" type="button" data-dup-set="linked" data-pair="${id}">🔁 مكرر</button><button class="btn sec" type="button" data-dup-set="distinct" data-pair="${id}">مش مكرر</button></div>
+      <p class="dup-help"><span><b>مكرر:</b> الاتنين يفضلوا ظاهرين، وكل واحد مربوط بالتاني.</span><span><b>مش مكرر:</b> الاقتراح بيتقفل للسؤالين دول.</span></p>`
+    : '<p class="dup-help">القرار محتاج صلاحية مراجعة على السؤالين.</p>';
+  else {
+    const who = d.decided_mine ? 'إنت' : (d.decided_by || 'مراجع');
+    foot = `<div class="dup-dec"><p>القرار: <b>${st === 'linked' ? 'مكرر' : 'مش مكرر'}</b>، أخده ${esc(who)}${d.decided_at ? ` <time class="muted" datetime="${esc(d.decided_at)}">${esc(ago(d.decided_at))}</time>` : ''}</p>${d.can_undo ? `<button class="btn warn" type="button" data-dup-undo="${id}">↩️ تراجع</button>` : ''}</div>`;
+  }
+  return `<section class="panel dup${st === 'linked' ? ' is-linked' : st === 'distinct' ? ' is-distinct' : ''}" id="dup-${id}" aria-labelledby="dup-h-${id}">
+      <div class="dup-head"><h3 id="dup-h-${id}">🔁 سؤال مشابه <span class="dup-pct" dir="ltr">${pct(d.score)}</span></h3>${d.source === 'extraction' ? '<span class="tag">من الاستخراج</span>' : ''}</div>
+      <div class="dup-row"><a class="qchip" href="#q/${Number(o.qid) || 0}">سؤال ${esc(o.qid_display || '')}</a><button class="btn sec dup-cmpb" type="button" data-dup-cmp="${id}" aria-expanded="false" aria-controls="dupc-${id}">قارن</button></div>
+      <div class="dup-cmp" id="dupc-${id}" hidden></div>
+      ${foot}
+    </section>`;
+}
+// options are matched by their words (at least half in common), best pairs first, because the order and the letters can differ
+const optWords = s => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').filter(Boolean);
+function optSim(a, b) {
+  const A = optWords(a), B = optWords(b);
+  if (!A.length || !B.length) return A.length === B.length ? 1 : 0;
+  const bag = new Map(); A.forEach(w => bag.set(w, (bag.get(w) || 0) + 1));
+  let c = 0; B.forEach(w => { const n = bag.get(w); if (n) { c++; bag.set(w, n - 1); } });
+  return 2 * c / (A.length + B.length);
+}
+function matchOptions(mine, theirs) {
+  const cand = [];
+  theirs.forEach((x, i) => mine.forEach((y, j) => cand.push([optSim(y.text, x.text), i, j])));
+  cand.sort((p, q) => q[0] - p[0] || p[1] - q[1] || p[2] - q[2]);
+  const res = theirs.map(() => -1), taken = new Set();
+  for (const [sc, i, j] of cand) { if (sc < 0.5) break; if (res[i] < 0 && !taken.has(j)) { res[i] = j; taken.add(j); } }
+  return res;
+}
+// the other question, marked against this one: highlighted = only in the other question, struck = only in this one
+function dupCompareHTML(d, v) {
+  const o = d.other || {}, mine = Array.isArray(v.options) ? v.options : [], theirs = Array.isArray(o.options) ? o.options : [];
+  const m = matchOptions(mine, theirs), taken = new Set(m.filter(j => j >= 0));
+  const keys = a => a.filter(x => x.is_correct).map(x => x.key);
+  const myK = keys(mine), thK = keys(theirs), other = esc(o.qid_display || '');
+  const same = myK.length > 0 && myK.length === thK.length && theirs.every((x, i) => !x.is_correct || (m[i] >= 0 && mine[m[i]].is_correct));
+  const row = (key, text, ok, note, gone) => `<li class="dup-o${ok ? ' ok' : ''}${gone ? ' gone' : ''}"><span class="dk">${esc(key)}</span><span class="t">${text}</span>${ok ? '<span class="c" title="الإجابة الصح" aria-label="الإجابة الصح">✓</span>' : ''}${note ? `<span class="nt" dir="rtl">${note}</span>` : ''}</li>`;
+  const rows = theirs.map((x, i) => {
+    const y = m[i] >= 0 ? mine[m[i]] : null;
+    return row(x.key, y ? diffHTML(y.text, x.text) : `<mark class="ins">${nl(x.text)}</mark>`, !!x.is_correct, y ? (y.key !== x.key ? `هنا ${esc(y.key)}` : '') : 'مش موجود هنا', false);
+  }).join('') + mine.filter((y, j) => !taken.has(j)).map(y => row(y.key, `<del class="rem">${nl(y.text)}</del>`, false, 'هنا بس', true)).join('');
+  return `<p class="dup-legend"><mark class="ins">المظلّل</mark> في سؤال ${other} بس، و<del class="rem">المشطوب</del> في السؤال ده بس، و✓ إجابة سؤال ${other}.</p>
+      <p class="dup-ans">إجابة Claude: هنا <b dir="ltr">${esc(myK.join(', ') || '—')}</b>، وفي سؤال ${other} <b dir="ltr">${esc(thK.join(', ') || '—')}</b>${myK.length && thK.length ? ` <span class="tag ${same ? 'ok' : 'warn'}">${same ? 'نفس الإجابة' : 'الإجابة مختلفة'}</span>` : ''}</p>
+      <div class="dup-q" lang="en" dir="ltr"><p class="dup-stem">${diffHTML(v.stem, o.stem)}</p><ul class="dup-opts">${rows}</ul></div>`;
+}
+function bindDupCards(b, v) {
+  const find = id => (b.duplicates || []).find(x => Number(x.id) === id);
+  $app.querySelectorAll('[data-dup-cmp]').forEach(bt => bt.onclick = () => {
+    const id = Number(bt.dataset.dupCmp), box = document.getElementById(`dupc-${id}`), d = find(id);
+    if (!box || !d) return;
+    if (!box.dataset.ready) { box.innerHTML = dupCompareHTML(d, v); box.dataset.ready = '1'; }   // built on first open only
+    const open = box.hidden; box.hidden = !open;
+    bt.setAttribute('aria-expanded', String(open)); bt.textContent = open ? 'إخفاء المقارنة' : 'قارن';
+  });
+  $app.querySelectorAll('[data-dup-set]').forEach(bt => bt.onclick = () => dupAction(Number(bt.dataset.pair), bt.dataset.dupSet));
+  $app.querySelectorAll('[data-dup-undo]').forEach(bt => bt.onclick = () => dupAction(Number(bt.dataset.dupUndo), 'undo'));
+}
+async function dupAction(id, what) {
+  const d = (S.bundle?.duplicates || []).find(x => Number(x.id) === id); if (!d) return;
+  const card = document.getElementById(`dup-${id}`), btns = card ? [...card.querySelectorAll('[data-dup-set],[data-dup-undo]')] : [];
+  btns.forEach(x => { x.disabled = true; });
+  const a = S.bundle.question.qid_display, o = d.other?.qid_display || '';
+  const before = listFor().map(r => r.qid), folder = S.view.folder;
+  try {
+    if (what === 'undo') await rpc('undo_duplicate', { p_pair_id: id });
+    else await rpc('decide_duplicate', { p_pair_id: id, p_decision: what });
+    if (what === 'linked') notify(`تم تسجيل إن السؤالين ${a} و${o} مكررين بفضل الله`, 'الاتنين بيفضلوا ظاهرين، وكل واحد مربوط بالتاني.');
+    else if (what === 'distinct') notify(`تم تسجيل إن السؤالين ${a} و${o} مش مكررين بفضل الله`, 'الاقتراح اتقفل للسؤالين دول، ومش هيتعرض تاني.');
+    else notify('تم التراجع عن قرار التكرار بفضل الله', 'الزوج رجع مستني قرار في فولدر "محتمل مكرر 🔁".');
+    S.navHold = before.includes(S.qid) ? { qid: S.qid, folder, list: before } : null;   // next / previous stay in this folder
+    await reloadQuestion();
+  } catch (e) {
+    const m = e?.message || '';
+    if (/Duplicate already decided|Nothing to undo|Duplicate suggestion not found/i.test(m)) {   // someone changed the pair meanwhile: show what stands now
+      notify('لم يتم الإجراء', /Nothing to undo/i.test(m) ? 'الزوج ده رجع مستني قرار بالفعل، والكارت اتحدّث.' : /not found/i.test(m) ? 'الاقتراح ده مش موجود دلوقتي، والصفحة اتحدّثت.' : 'مراجع تاني أخد قرار في الزوج ده، والكارت اتحدّث بقراره.', 'err', 6500);
+      await reloadQuestion().catch(() => { });
+      return;
+    }
+    btns.forEach(x => { x.disabled = false; });
+    fail(e);
+  }
+}
+// same question, same scroll position; the list is reloaded too, so folder counts and badges follow the decision
+async function reloadQuestion() {
+  const qid = S.qid, y = scrollY;
+  const [b, tl] = await Promise.all([rpc('question_bundle', { p_qid: qid }), rpc('question_timeline', { p_qid: qid }).catch(() => null), loadQueue().catch(() => { })]);
+  if (S.qid !== qid || !b || location.hash !== `#q/${qid}`) return;
+  S.bundle = b; S.timeline = tl || [];
+  renderQuestion(); scrollTo(0, y);
+}
+
 /* ---------- 3.9: extraction report (integration_backlog 25) ----------
    import_batches stays admin-only; reviewers read it through question_report / batch_report (migration 030).
    Both refuse questions that are not solved yet (same isolation as the solving chats). */
@@ -609,6 +822,125 @@ async function renderBatchReport(id) {
   scrollTo(0, 0);
 }
 window.addEventListener('hashchange', e => { S.cameFromApp = !!(e.oldURL && e.oldURL.split('#')[0] === location.href.split('#')[0]); });
+
+/* ---------- 4.0: rebuild an unsolved question (integration_backlog 30, migration 035) ----------
+   Questions that cannot be solved as they are (fewer than two options, or flagged by the isolated solver) wait in
+   the folder "محتاجة إعادة تركيب" for a reviewer with access 3. The reviewer rewrites the stem and options from a
+   trusted reference; the server saves a NEW version (reviewer_completion), shuffles the options and sends the
+   question back to the isolated solver, which sees only the stem and the options. The draft is kept on the device
+   and the account like every other form (kind 'rebuild', migration 036). */
+const RB_SRC = { auto: 'تلقائي', solver: 'Claude وقت الحل', reviewer: 'مراجع', extraction: 'الاستخراج' };
+const rbReason = x => x.reason === 'fewer_than_two_options' ? 'السؤال فيه أقل من اختيارين، فمايتحلّش بالشكل ده.' : (x.reason || '');
+function rbItem(r) {
+  const tags = (r.reasons || []).map(x => `<span class="tag amber">🛠️ ${esc(x.source === 'auto' ? 'اختيارات ناقصة' : RB_SRC[x.source] || x.source)}</span>`).join('')
+    + (Drafts.get(r.qid, 'rebuild') ? '<span class="tag amber">📝 مسودة لم تُرسل</span>' : '');
+  return `<li><a href="#rebuild/${r.qid}">
+      <span class="qid">${esc(r.qid_display)}</span>
+      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${tags}</div></span>
+    </a></li>`;
+}
+async function renderRebuild(qid) {
+  stopSolverTimer(); closeSheets(); S.bundle = null; S.qid = null;
+  $app.innerHTML = '<div class="loading">جاري تحميل السؤال…</div>';
+  if (!S.draftsLoaded) { Drafts.load(); S.draftsLoaded = true; }
+  S.rebuild = (await rpc('rebuild_queue')) || [];
+  const r = S.rebuild.find(x => x.qid === qid);
+  const back = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = ''; };
+  const head = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">إعادة تركيب السؤال</span>`);
+  if (!r) {
+    $app.innerHTML = head + `<main class="wrap"><div class="empty"><p>السؤال رقم ${esc(String(qid))} مش مستني إعادة تركيب: يمكن اتكمّل خلاص، أو مش ضمن صلاحيتك.</p></div></main>`;
+    document.getElementById('back').onclick = back;
+    return;
+  }
+  const saved = Drafts.get(qid, 'rebuild');
+  const hasSrc = !!(r.source_answer_text || r.source_answer);
+  const cur = r.options || [];
+  const ta = (id, val, cls = 'en', rows = 2) => `<textarea class="t ${cls}" id="${id}" rows="${rows}"${cls ? '' : ' dir="auto"'}>${esc(val || '')}</textarea>`;
+  $app.innerHTML = head + `
+  <main class="wrap rb">
+    <h1 class="rep-title">السؤال ${esc(r.qid_display)}</h1>
+    <div class="facts">${r.chapter ? `<span>الشابتر: <b>${esc(r.chapter)}</b></span>` : ''}${r.years ? `<span>السنة: <b>${esc(r.years)}</b></span>` : ''}${r.source_question_no ? `<span>رقمه في المصدر: <b>${esc(r.source_question_no)}</b>${r.source_page ? ` (صفحة ${esc(r.source_page)})` : ''}</span>` : ''}</div>
+    ${r.source?.pdf_page ? '<p><button class="btn sec" type="button" id="rb-page">📄 افتح صفحة المصدر</button></p>' : ''}
+    <section class="panel"><h3>ليه السؤال هنا</h3><ul class="rb-why">${(r.reasons || []).map(x => `<li><b>${esc(RB_SRC[x.source] || x.source)}:</b> <span dir="auto">${esc(rbReason(x))}</span></li>`).join('')}</ul></section>
+    <section class="panel"><h3>رد المصدر</h3>
+      ${hasSrc ? `${r.source_answer_text ? `<p class="rb-src" dir="auto">${nl(r.source_answer_text)}</p>` : ''}${r.source_answer ? `<p class="small muted">الحرف المتسجل في المصدر: <b>${esc(r.source_answer)}</b>، والحروف هتتغير مع الترتيب الجديد.</p>` : ''}`
+        : '<p class="small muted" style="margin:0">المصدر مالوش رد متسجل للسؤال ده.</p>'}
+      ${r.handwritten_note ? `<details class="rb-note"><summary>الملاحظة المنقولة من المصدر</summary><div class="pre" dir="auto">${nl(r.handwritten_note)}</div></details>` : ''}
+    </section>
+    ${saved ? `<div class="draft-note">رجّعتلك مسودتك (آخر حفظ: ${esc(draftAge(saved))}).</div>` : ''}
+    <p class="hint">اكتب نص السؤال واختياراته من مرجع موثوق. الاختيارات بتترتب عشوائي بعد الحفظ، فاكتبها بأي ترتيب. خلّيها بطول وأسلوب متقارب، عشان مايبقاش فيه اختيار باين إنه الإجابة. Claude وقت الحل بيشوف النص والاختيارات بس. في كل خانة زرار 🎙️ تكتب بيه بصوتك.</p>
+    <label class="f" for="rb-stem">نص السؤال</label>${ta('rb-stem', r.stem, 'en', 4)}
+    ${[0, 1, 2, 3, 4].map(i => `<label class="f" for="rb-o${i}">الاختيار ${i + 1}${i < 2 ? '' : ' (اختياري)'}</label>${ta(`rb-o${i}`, cur[i]?.text)}`).join('')}
+    ${hasSrc ? `<div class="f" id="rb-m-l">رد المصدر بيقابل أنهي اختيار؟</div>
+      <div class="letters" id="rb-match" role="group" aria-labelledby="rb-m-l">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-m="${n}" aria-pressed="false">${n}</button>`).join('')}<button type="button" data-m="0" aria-pressed="false">ولا واحد</button></div>
+      <p class="hint">لو اخترت رقم، المقارنة بعد الحل بتحصل لوحدها. \"ولا واحد\" معناه إنك شايف رد المصدر مش ضمن الاختيارات، والمقارنة هتبقى عليك.</p>` : ''}
+    <label class="f" for="rb-ref">المرجع اللي الاختيارات جاية منه (مطلوب)</label><input class="t" id="rb-ref" dir="auto" placeholder="مثال: Kanski 9th ed., p. 350">
+    <label class="f" for="rb-note">ملاحظة للفريق (اختياري)</label>${ta('rb-note', '', '', 2)}
+    <p class="hint">المرجع والملاحظة بيظهروا في تاريخ السؤال للفريق بس، ومابيوصلوش لـ Claude وقت الحل.</p>
+    <div class="saved-line" id="rb-saved" aria-live="polite">${saved ? `✓ محفوظ (${esc(draftAge(saved))})` : 'مسودتك بتتحفظ تلقائيًا على جهازك وعلى حسابك.'}</div>
+    <div class="err" id="rb-err" role="alert"></div>
+    <div class="rb-foot"><button class="btn ok" id="rb-save" type="button">✓ حفظ وإرجاعه للحل</button><button class="btn warn" id="rb-clear" type="button">✕ مسح المسودة</button></div>
+  </main>`;
+  const $ = sel => $app.querySelector(sel);
+  document.getElementById('back').onclick = back;
+  const pg = $('#rb-page'); if (pg) pg.onclick = () => openPageViewer(r.source, Number(r.source.pdf_page));
+  const fields = [...$app.querySelectorAll('main textarea, main input')];
+  const initial = Object.fromEntries(fields.map(x => [x.id, x.value]));
+  let match = null;   // 1–5 = the option box the source answer matches, 0 = none of them
+  if (saved?.payload?.fields) for (const [id, val] of Object.entries(saved.payload.fields)) { const el = $('#' + id); if (el) el.value = val; }
+  if (hasSrc && saved?.payload && Number.isInteger(saved.payload.match)) match = saved.payload.match;
+  const mBox = $('#rb-match');
+  const paintMatch = () => {
+    if (!mBox) return;
+    mBox.querySelectorAll('[data-m]').forEach(b => {
+      const n = Number(b.dataset.m), empty = n > 0 && !$('#rb-o' + (n - 1)).value.trim();
+      if (empty && match === n) match = null;
+      b.disabled = empty; b.setAttribute('aria-pressed', String(match === n));
+    });
+  };
+  paintMatch();
+  const unlisten = savedLine($('#rb-saved'));
+  window.addEventListener('hashchange', unlisten, { once: true });
+  const dirty = () => fields.some(x => x.value !== initial[x.id]) || match !== null;
+  const persist = () => {
+    if (!dirty()) { if (Drafts.get(qid, 'rebuild')) Drafts.clear(qid, 'rebuild'); return; }
+    Drafts.save(qid, 'rebuild', { fields: Object.fromEntries(fields.filter(x => x.value !== initial[x.id]).map(x => [x.id, x.value])), match });
+  };
+  fields.forEach(x => x.addEventListener('input', () => { paintMatch(); persist(); }));
+  if (mBox) mBox.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { match = Number(b.dataset.m); paintMatch(); persist(); });
+  fields.forEach(x => attachMic(x, x.id === 'rb-note' ? 'ar-EG' : 'en-US'));
+  $('#rb-clear').onclick = async () => {
+    if (!Drafts.get(qid, 'rebuild') && !dirty()) { toast('مفيش مسودة تتمسح.'); return; }
+    if (!confirm('مسح اللي كتبته هنا؟ السؤال هيفضل في الفولدر زي ما هو.')) return;
+    await Drafts.clear(qid, 'rebuild');
+    notify('اتمسحت المسودة', 'السؤال لسه مستني إعادة تركيب.', 'info');
+    renderRebuild(qid);
+  };
+  $('#rb-save').onclick = async () => {
+    const err = $('#rb-err'), val = id => $('#' + id).value.trim();
+    err.textContent = '';
+    const stem = val('rb-stem');
+    const filled = [0, 1, 2, 3, 4].map(i => ({ box: i + 1, text: val('rb-o' + i) })).filter(o => o.text);
+    if (stem.length < 10) { err.textContent = 'اكتب نص السؤال كامل.'; $('#rb-stem').focus(); return; }
+    if (filled.length < 2) { err.textContent = 'اكتب اختيارين على الأقل.'; $('#rb-o0').focus(); return; }
+    const low = filled.map(o => o.text.toLowerCase());
+    if (new Set(low).size !== low.length) { err.textContent = 'فيه اختيارين بنفس النص.'; return; }
+    if (hasSrc && match === null) { err.textContent = 'اختار رد المصدر بيقابل أنهي اختيار، أو "ولا واحد".'; mBox.scrollIntoView({ block: 'center' }); return; }
+    const ref = val('rb-ref');
+    if (ref.length < 3) { err.textContent = 'اكتب المرجع اللي الاختيارات جاية منه.'; $('#rb-ref').focus(); return; }
+    const idx = match ? filled.findIndex(o => o.box === match) + 1 : 0;
+    if (!confirm(`حفظ السؤال ${r.qid_display} وإرجاعه للحل؟\nهيتحفظ كنسخة جديدة، والاختيارات هتترتب عشوائي.`)) return;
+    const btn = $('#rb-save'); btn.disabled = true;
+    try {
+      await rpc('rebuild_question', { p_qid: qid, p_stem: stem, p_options: filled.map(o => o.text), p_source_match: idx || null, p_reference: ref, p_note: val('rb-note') || null });
+      await Drafts.clear(qid, 'rebuild');
+      S.dirty = true;
+      notify(`تم حفظ السؤال ${r.qid_display} بفضل الله`, 'رجع للحل المعزول. بعد ما يتحل هيوصلك في "تنتظرك"، ويفضل مخفي عن الطلاب لحد اعتمادك.');
+      location.hash = '';
+    } catch (e) { btn.disabled = false; err.textContent = errText(e) + ' — مسودتك محفوظة، جرّب تاني.'; }
+  };
+  scrollTo(0, 0);
+}
 
 /* ---------- 3.9: source page viewer (integration_backlog 23) ----------
    Each PDF page is an image in the private bucket "source-pages" (table source_files says where, and the page offset:
@@ -762,6 +1094,8 @@ function describe(ev, forList) {
       break;
     case 'commented': Object.assign(out, { icon: '💬', what: 'تعليق' }); if (d.comment) out.lines.push(['', d.comment]); break;
     case 'quick_edit': Object.assign(out, { icon: '⚡', what: 'تعديل سريع', cls: 'cobalt' }); if (d.note) out.lines.push(['السبب', d.note]); break;
+    case 'rebuilt': Object.assign(out, { icon: '🛠️', what: 'إعادة تركيب النص والاختيارات', cls: 'cobalt' }); if (d.note) out.lines.push(['', d.note]); break;
+    case 'rebuild_requested': Object.assign(out, { icon: '🛠️', who: d.by || who, what: 'طلب إعادة تركيب السؤال' }); if (d.reason) out.lines.push(['السبب', d.reason]); break;
     case 'note_added': Object.assign(out, { icon: '📝', what: 'ملاحظة للطلاب مع الاعتماد' }); if (d.student_note) out.lines.push(['', d.student_note]); break;
     case 'claude_revised': Object.assign(out, { icon: '🤖', who: 'Claude', what: `نفّذ طلب ${d.request?.by || 'المراجع'}${d.request?.type_label ? ` (${d.request.type_label})` : ''}`, cls: 'cobalt' });
       if (d.request?.resolution) out.lines.push(['اللي اتعمل', forList ? clip(d.request.resolution) : d.request.resolution]); break;
@@ -773,6 +1107,15 @@ function describe(ev, forList) {
     case 'extracted': Object.assign(out, { icon: '📄', who: 'البداية', what: 'اتنقل السؤال من ملف المصدر' }); break;
     case 'solved': Object.assign(out, { icon: '🤖', who: 'Claude', what: 'حل السؤال وكتب الشرح' }); break;
     case 'updated': Object.assign(out, { icon: '🛠️', who: 'Claude', what: 'تحديث للنص' }); break;
+    case 'dup_linked': case 'dup_distinct': {   // 4.1 (migration 037): one event on each question of the pair
+      const linked = ev.kind === 'dup_linked';
+      Object.assign(out, { icon: '🔁', what: `قرار التكرار: ${linked ? 'مكرر' : 'مش مكرر'} مع سؤال ${d.other_display || ''}`, cls: linked ? 'cobalt' : '' });
+      if (!forList && pct(d.score)) out.lines.push(['نسبة التشابه', pct(d.score)]);
+      break;
+    }
+    case 'dup_undone': Object.assign(out, { icon: '↩️', what: `تراجع عن قرار التكرار مع سؤال ${d.other_display || ''}`, cls: 'warn' });
+      if (d.was) out.badge = [`كان: ${d.was === 'linked' ? 'مكرر' : 'مش مكرر'}`, ''];
+      break;
     default: out.what = ev.kind;
   }
   return out;
@@ -815,8 +1158,8 @@ async function renderActivity(more) {
 function drawActivity(lastSeen) {
   const F = S.feedFilter || (S.feedFilter = { who: 'all', kind: 'all' });
   const people = [...new Set(S.feed.filter(e => !e.mine && e.actor && !['claude_revised'].includes(e.kind)).map(e => e.actor))];
-  const KINDS = { all: 'كل الأحداث', approved: 'الاعتماد', requested: 'طلبات التعديل', quick_edit: 'التعديل السريع', claude: 'تنفيذ Claude', back: 'الرجوع والإلغاء' };
-  const kindOk = e => F.kind === 'all' || (F.kind === 'claude' ? e.kind === 'claude_revised' : F.kind === 'back' ? /undone|cancelled|rejected|original/.test(e.kind) : e.kind === F.kind);
+  const KINDS = { all: 'كل الأحداث', approved: 'الاعتماد', requested: 'طلبات التعديل', quick_edit: 'التعديل السريع', claude: 'تنفيذ Claude', dup: 'المكرر', back: 'الرجوع والإلغاء' };
+  const kindOk = e => F.kind === 'all' || (F.kind === 'claude' ? e.kind === 'claude_revised' : F.kind === 'dup' ? e.kind.startsWith('dup_') : F.kind === 'back' ? /undone|cancelled|rejected|original/.test(e.kind) : e.kind === F.kind);
   const whoOk = e => F.who === 'all' || (F.who === 'others' ? !e.mine : F.who === 'me' ? e.mine : e.actor === F.who && !e.mine);
   const list = S.feed.filter(e => kindOk(e) && whoOk(e));
   let html = '', day = '';
@@ -886,16 +1229,22 @@ function navInfo() {
   // navigate inside the current folder; if the question is not in it (opened by number or link), use its own folder
   let folder = S.view.folder, list = listFor(), i = list.findIndex(r => r.qid === S.qid);
   const row = S.rows.find(r => r.qid === S.qid);
+  // 4.1: a duplicate decision can take the question out of the open folder ("محتمل مكرر"): keep that folder and its order
+  const hold = S.navHold;
+  if (i < 0 && hold && hold.qid === S.qid && hold.folder === folder) {
+    const at = hold.list.indexOf(S.qid), pick = ids => { for (const id of ids) { const r = list.find(x => x.qid === id); if (r) return r; } return null; };
+    return { list, i, folder, prev: pick(hold.list.slice(0, at).reverse()), next: pick(hold.list.slice(at + 1)) };
+  }
   if (i < 0 && row) {
     const f = FOLDERS.slice(1).find(x => x.id !== 'all' && x.test(row)) || FOLDERS.find(x => x.id === 'all');
-    folder = f.id; list = listFor({ ...S.view, folder, conf: 'all', disagree: false, incomplete: false }); i = list.findIndex(r => r.qid === S.qid);
+    folder = f.id; list = listFor({ ...S.view, folder, ...NO_FILTERS }); i = list.findIndex(r => r.qid === S.qid);
   }
   return { list, i, folder, prev: i > 0 ? list[i - 1] : null, next: i >= 0 && i < list.length - 1 ? list[i + 1] : null };
 }
 function go(r) {
   if (!r) return;
   const nav = navInfo();
-  if (nav.folder !== S.view.folder) { S.view = { ...S.view, folder: nav.folder, conf: 'all', disagree: false, incomplete: false }; saveView(); }
+  if (nav.folder !== S.view.folder) { S.view = { ...S.view, folder: nav.folder, ...NO_FILTERS }; saveView(); }
   location.hash = `#q/${r.qid}`;
 }
 
@@ -1020,11 +1369,12 @@ function renderQuestion() {
       <span class="small muted" dir="ltr">${esc(q.code || '')}</span>
     </div>
     <div class="facts">${facts}</div>
-    ${studentLine(b.student_state, true)}
+    ${studentRowHTML(b, q)}
     ${draftPanels}
     ${verdict}
     ${alertCardHTML(split.alert, b.source)}
     ${reportSectionHTML(q)}
+    ${(b.duplicates || []).map(dupCardHTML).join('')}
     ${reqPanel}
     ${round2}
     ${incomplete}
@@ -1094,6 +1444,7 @@ function renderQuestion() {
   $app.querySelectorAll('audio[data-voice]').forEach(a => signed('voice-notes', a.dataset.voice).then(u => { if (u) a.src = u; }));
   attachSwipe(document.getElementById('qmain'), () => go(nav.next), () => go(nav.prev));
   $app.querySelectorAll('[data-page]').forEach(bt => bt.onclick = () => openPageViewer(b.source, Number(bt.dataset.page)));
+  bindDupCards(b, v);
   bindReportSection(q);
 }
 function labelType(v) { const t = (S.bundle?.revision_types || []).find(x => x.value === v); return t ? t.label : (v || ''); }

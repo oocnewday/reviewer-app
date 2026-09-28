@@ -438,3 +438,60 @@ details.rep>summary{cursor:pointer;font-weight:600;padding:4px 0}
 .pv-stage img{display:block;width:100%;max-width:none;height:auto;background:#fff;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .pv-stage img.pv-wait{opacity:.25}
 .pv-msg{position:absolute;inset:auto 12px 12px;background:rgba(22,32,58,.9);color:#fff;border-radius:10px;padding:10px 12px;font-size:.9rem;text-align:center}
+
+/* 4.0: rebuild an unsolved question (integration_backlog 30) */
+.rb-lead{margin:6px 2px 10px}
+.rb-why{margin:0;padding-inline-start:18px}
+.rb-why li+li{margin-top:4px}
+.rb-src{margin:0 0 6px;font-family:var(--read);font-size:1.02rem}
+details.rb-note{margin-top:8px}
+details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;padding:6px 0}
+.rb .letters button[data-m="0"]{padding:0 14px}
+.rb .letters button:disabled{opacity:.4;cursor:not-allowed}
+.rb-foot{display:grid;grid-template-columns:1.4fr 1fr;gap:10px;margin:16px 0 28px}
+.rb-foot .btn{min-height:50px}
+
+/* 4.1 – similar questions (backlog 29) and the two list filters (31, 32) */
+.panel.dup{border:1.5px solid var(--cobalt);background:var(--cobalt-2)}
+.panel.dup.is-linked{border:1px solid var(--line);background:var(--surface);box-shadow:inset -3px 0 0 var(--cobalt)}
+.panel.dup.is-distinct{border:1px dashed var(--line);background:var(--surface)}
+.dup-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dup-head h3{margin:0;font-size:1rem;color:var(--cobalt)}
+.panel.dup.is-linked .dup-head h3,.panel.dup.is-distinct .dup-head h3{color:var(--ink)}
+.dup-pct{display:inline-block;margin-inline-start:4px;padding:0 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:.85rem;font-variant-numeric:tabular-nums}
+.dup-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.panel.dup .qchip{min-height:36px;background:var(--surface);border:1px solid var(--cobalt)}
+.dup-row .dup-cmpb{margin-inline-start:auto;padding:6px 16px}
+.dup-cmp{margin-top:10px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.dup-cmp[hidden]{display:none}
+.dup-legend,.dup-ans{margin:0 0 8px;font-size:.84rem;color:var(--ink-2);line-height:1.8}
+.dup-ans b{color:var(--ink)}
+.dup-q{font-family:var(--read);font-size:1rem;line-height:1.65;text-align:left;overflow-wrap:anywhere}
+.dup-stem{margin:4px 0 8px;font-weight:600}
+.dup-opts{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.dup-o{display:flex;gap:8px;align-items:baseline;border:1px solid var(--line-2);border-radius:10px;padding:6px 10px}
+.dup-o.ok{border-color:var(--ok);box-shadow:inset 3px 0 0 var(--ok)}
+.dup-o.gone{border-style:dashed}
+.dup-o .dk{font-weight:700;min-width:1.2em}
+.dup-o .t{flex:1;min-width:0}
+.dup-o .c{color:var(--ok);font-weight:700}
+.dup-o .nt{font-family:var(--ui);font-size:.75rem;color:var(--ink-3);white-space:nowrap}
+.dup-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.dup-help{margin:8px 0 0;font-size:.8rem;color:var(--ink-3);line-height:1.6}
+.dup-help span{display:block}
+.dup-help b{color:var(--ink-2);font-weight:600}
+.dup-dec{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.dup-dec p{margin:0;flex:1;min-width:12em;line-height:1.6}
+.dup-dec .btn{padding:6px 14px}
+.tag.dup-p{background:var(--cobalt-2);color:var(--cobalt)}
+.tag.dup-l{background:transparent;border:1px solid var(--line);color:var(--ink-2)}
+.filters .chips{flex-wrap:wrap}
+.filters .chips.sub{margin:6px 8px 0 0;padding-inline-start:10px;border-inline-start:2px solid var(--line)}
+.filters .chips.sub .chip{min-height:34px;padding:5px 12px;font-size:.88rem}
+
+/* 4.7 (backlog 28): "👁️ افتحه في تطبيق الطلاب" next to the students' line on the question page */
+.svrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:0 0 14px}
+.svrow .sv-big{margin:0}
+.svlink{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:6px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--cobalt);font-size:.88rem;font-weight:600;text-decoration:none;white-space:nowrap}
+.svlink:hover{background:var(--cobalt-2)}
+.svlink:active{transform:translateY(1px)}
