@@ -7,7 +7,7 @@ const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل مع�
 const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '3.8';
+const APP_VERSION = '3.9';
 const APP_BUILD = '27/9/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -80,6 +80,7 @@ function errText(e) {
   if (/Request is not open/i.test(m)) return 'الطلب ده اتنفّذ أو اتلغى بالفعل. حدّث الصفحة.';
   if (/Not your/i.test(m)) return 'ده مش طلبك/اعتمادك، فمش هتقدر تغيّره.';
   if (/not approved|No approval/i.test(m)) return 'السؤال مش معتمد حاليًا.';
+  if (/Not solved yet/i.test(m)) return 'تقرير الاستخراج بيظهر بعد حل السؤال.';
   if (/Nothing to undo/i.test(m)) return 'مفيش خطوة سابقة ترجعلها في السؤال ده. حدّث الصفحة.';
   if (/Already original/i.test(m)) return 'السؤال أصلًا على نسخته الأصلية.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'لا يوجد اتصال بالإنترنت. تأكد من الاتصال وحاول مرة أخرى.';
@@ -335,6 +336,7 @@ const FOLDERS = [
   { id: 'quick', label: 'عُدّلت سريعًا', test: r => r.status === 'revised' && r.last_edit_label === 'reviewer_quick_edit' },
   { id: 'notes', label: 'ملاحظات للطلاب', test: r => !!r.note_state },
   { id: 'approved', label: 'معتمدة', test: r => r.status === 'approved' },
+  { id: 'alerts', label: 'فيها تنبيه ⚠️', test: r => !!(r.alert_kinds && r.alert_kinds.length) },   // 3.9: "⚠️ للمراجع" block (backlog 24); kept before 'all' so navigation inside folders is unchanged
   { id: 'all', label: 'الكل', test: () => true },
 ];
 const SORTS = { priority: 'الأولوية (المختلف والأقل ثقة أولًا)', id_asc: 'رقم السؤال: تصاعدي', id_desc: 'رقم السؤال: تنازلي', conf_low: 'الثقة: الأقل أولًا', conf_high: 'الثقة: الأعلى أولًا' };
@@ -373,7 +375,9 @@ async function route() {
   if (!S.view) S.view = loadView();
   const m = location.hash.match(/^#q\/(\d+)/);
   try {
+    const rm = location.hash.match(/^#report\/(\d+)/);
     if (location.hash === '#activity') { if (!S.rows.length) await loadQueue(); await renderActivity(false); }
+    else if (rm) await renderBatchReport(Number(rm[1]));
     else if (m) await openQuestion(Number(m[1]));
     else {
       closeSheets();
@@ -386,8 +390,8 @@ async function route() {
 }
 let lastHash = location.hash;
 window.addEventListener('hashchange', () => {
-  if (!lastHash.startsWith('#q/') && lastHash !== '#activity' && location.hash.startsWith('#q/')) S.listScroll = scrollY;   // leaving the list
-  if (!location.hash) { /* back to list keeps listScroll */ } else if (!location.hash.startsWith('#q/')) S.listScroll = 0;
+  if (!lastHash.startsWith('#q/') && !lastHash.startsWith('#report/') && lastHash !== '#activity' && location.hash.startsWith('#q/')) S.listScroll = scrollY;   // leaving the list
+  if (!location.hash) { /* back to list keeps listScroll */ } else if (!location.hash.startsWith('#q/') && !location.hash.startsWith('#report/')) S.listScroll = 0;
   lastHash = location.hash;
   if (S.session && S.profile?.is_active) route();
 });
@@ -409,6 +413,7 @@ function reasonTags(r, showStatus) {
   if (r.match_status === 'disagree') t.push('<span class="tag warn">مختلف مع المصدر</span>');
   if (r.ai_confidence) t.push(`<span class="tag ${r.ai_confidence === 'low' ? 'amber' : ''}">ثقة ${esc(CONF[r.ai_confidence] || r.ai_confidence)}</span>`);
   if (r.is_incomplete) t.push('<span class="tag amber">ناقص في المصدر</span>');
+  t.push(alertTags(r.alert_kinds, r.is_incomplete));
   if (r.status === 'revised' && r.last_edit_label === 'reviewer_quick_edit') t.push(`<span class="tag cobalt">⚡ عدّله سريعًا${r.last_edit_by ? ': ' + esc(r.last_edit_by) : ''}</span>`);
   else if (r.status === 'revised') t.push(`<span class="tag cobalt">جولة ${(r.rounds || 1) + 1}</span>`);
   if (Drafts.qids().has(r.qid)) t.push('<span class="tag amber">📝 مسودة لم تُرسل</span>');
@@ -501,6 +506,221 @@ function notePreview(r) {
   const [label, cls] = NOTE_STATE[r.note_state] || ['', ''];
   const txt = r.note_text.length > 140 ? r.note_text.slice(0, 140) + '…' : r.note_text;
   return `<div class="npv"><span class="tag ${cls}">${label}</span><span class="npv-t" dir="auto">📝 ${esc(txt)}</span></div>`;
+}
+
+/* ---------- 3.9: "⚠️ للمراجع" card (integration_backlog 24) ----------
+   The extraction chat appends a block at the end of handwritten_note: an empty line, a line starting with "⚠️ للمراجع",
+   then one "• " line per problem. These are Claude's words, not the source's, so they get their own card above the
+   transcribed note, and the note is shown without them. Display only: the stored note is never changed.
+   The same kinds are computed on the server (private.alert_kinds, migration 030) for the folder and the list tags. */
+const ALERT_HEAD = '⚠️ للمراجع';
+const ALERT_KINDS = [   // first words of a line -> key (same keys as the server), badge label
+  ['إجابة المصدر', 'source_answer'], ['مكرر', 'duplicate'], ['ناقص', 'incomplete'],
+  ['غير مؤكد', 'uncertain'], ['تصليح كتابة', 'typo'], ['تصنيف', 'category'],
+];
+const ALERT_LABEL = Object.fromEntries(ALERT_KINDS.map(([label, key]) => [key, label]));
+function splitAlert(note) {
+  const s = String(note || '');
+  const at = s.startsWith(ALERT_HEAD) ? 0 : s.indexOf('\n\n' + ALERT_HEAD);
+  if (at < 0) return { main: s, alert: null };
+  const [head, ...rest] = s.slice(at === 0 ? 0 : at + 2).split('\n');
+  const lines = [];
+  for (const raw of rest) {
+    const t = raw.trim(); if (!t) continue;
+    if (!t.startsWith('•')) { if (lines.length) lines[lines.length - 1].text += '\n' + t; else lines.push({ key: null, label: '', text: t }); continue; }
+    const body = t.replace(/^•\s*/, '');
+    const hit = ALERT_KINDS.find(([label]) => body.startsWith(label) && /^(\s|:|$)/.test(body.slice(label.length)));
+    lines.push(hit ? { key: hit[1], label: hit[0], text: body.slice(hit[0].length).replace(/^\s*:\s*/, '') } : { key: null, label: '', text: body });
+  }
+  return { main: at === 0 ? '' : s.slice(0, at), alert: { head: head.trim(), lines } };
+}
+function alertTags(kinds, incompleteShown) {
+  if (!kinds || !kinds.length) return '';
+  const keys = ALERT_KINDS.map(k => k[1]).filter(k => kinds.includes(k) && !(k === 'incomplete' && incompleteShown));   // "ناقص في المصدر" is already there
+  if (!keys.length) return '<span class="tag ak ak-other">⚠️ تنبيه للمراجع</span>';
+  return keys.map((k, i) => `<span class="tag ak ak-${k}">${i ? '' : '⚠️ '}${ALERT_LABEL[k]}</span>`).join('');
+}
+function alertCardHTML(al, src) {
+  if (!al) return '';
+  const sub = al.head.slice(ALERT_HEAD.length).trim().replace(/:\s*$/, '');
+  const items = al.lines.map(l => `<li>${l.key ? `<span class="tag ak ak-${l.key}">${esc(l.label)}</span> ` : ''}<span dir="auto">${nl(l.text)}</span></li>`).join('');
+  return `<section class="panel alert" aria-labelledby="alert-h">
+      <div class="al-head"><h3 id="alert-h">⚠️ للمراجع</h3>${src?.pdf_page ? `<button class="btn sec pgbtn" type="button" data-page="${Number(src.pdf_page)}">📄 افتح صفحة المصدر</button>` : ''}</div>
+      ${sub ? `<div class="al-sub" dir="auto">${esc(sub)}</div>` : ''}
+      <ul class="al-list">${items}</ul>
+      <p class="al-foot">ملاحظات Claude وقت نقل السؤال من الملف، مش كلام المصدر. القرار فيها ليك.</p>
+    </section>`;
+}
+
+/* ---------- 3.9: extraction report (integration_backlog 25) ----------
+   import_batches stays admin-only; reviewers read it through question_report / batch_report (migration 030).
+   Both refuse questions that are not solved yet (same isolation as the solving chats). */
+const REP_KIND = { fix: ['تصليح كتابة', ''], uncertain: ['غير مؤكد', 'amber'], note: ['ملاحظة', 'cobalt'], dup: ['مكرر', 'violet'] };
+const RepCache = {};
+function repLineHTML(l, self, batchId) {
+  const [label, cls] = REP_KIND[l.kind] || [l.kind, ''];
+  const links = (l.links || []), open = links.filter(x => x.open && x.qid !== self), closed = links.filter(x => !x.open).length;
+  const other = batchId && l.batch_id !== batchId ? ` <span class="small muted" dir="auto">(من ${esc(l.batch_name || '')})</span>` : '';
+  return `<li class="rl"><div class="rl-h"><span class="tag ${cls}">${esc(label)}</span> <b>${l.general ? 'على الدفعة كلها' : `سؤال ${/[A-Za-z–,-]/.test(l.q || '') ? `<bdi dir="ltr">${esc(l.q)}</bdi>` : esc(l.q)}`}</b>${other}
+      ${open.map(x => `<a class="qchip" href="#q/${Number(x.qid)}" title="افتح السؤال">↗ ${esc(x.qid_display)}</a>`).join('')}${closed && !self ? `<span class="small muted">${closed === 1 ? 'وسؤال لسه ماتحلّش' : `و${closed} لسه ماتحلّوش`}</span>` : ''}</div>
+      <div class="rl-t" dir="auto">${nl(l.text)}</div></li>`;
+}
+function reportSectionHTML(q) {
+  if (!q.batch_id || q.status === 'extracted') return '';
+  const c = RepCache[q.qid], isOpen = S.repOpen === q.qid;
+  return `<details class="rep" id="rep" ${isOpen ? 'open' : ''}><summary>📋 تقرير الاستخراج <span class="small muted">(التصليحات والملاحظات وقت نقل السؤال)</span></summary>
+    <div id="rep-body">${c ? repBodyHTML(c, q) : '<p class="small muted" style="margin:8px 0 0">جاري التحميل…</p>'}</div></details>`;
+}
+function repBodyHTML(c, q) {
+  const lines = c.lines || [];
+  return `${lines.length ? `<ol class="rlist">${lines.map(l => repLineHTML(l, q.qid, q.batch_id)).join('')}</ol>` : '<p class="small muted" style="margin:8px 0">مفيش سطور خاصة بالسؤال ده في التقرير.</p>'}
+    <a class="btn block" href="#report/${Number(q.batch_id)}" id="rep-all">📑 تقرير الدفعة كامل${c.batch?.name ? ` <span class="small muted" dir="auto">(${esc(c.batch.name)})</span>` : ''}</a>`;
+}
+function bindReportSection(q) {
+  const d = document.getElementById('rep'); if (!d) return;
+  const fill = async () => {
+    const box = document.getElementById('rep-body');
+    try {
+      if (!RepCache[q.qid] || Date.now() - RepCache[q.qid].at > 10 * 60000) RepCache[q.qid] = { ...(await rpc('question_report', { p_qid: q.qid })), at: Date.now() };
+      if (box && document.getElementById('rep') === d) box.innerHTML = repBodyHTML(RepCache[q.qid], q);
+    } catch (e) { if (box) box.innerHTML = `<p class="small" style="margin:8px 0 0">${esc(errText(e))}</p>`; }
+  };
+  d.addEventListener('toggle', () => { S.repOpen = d.open ? q.qid : null; if (d.open) fill(); });
+  if (d.open && !RepCache[q.qid]) fill();
+}
+async function renderBatchReport(id) {
+  stopSolverTimer(); closeSheets(); S.bundle = null; S.qid = null;
+  $app.innerHTML = '<div class="loading">جاري تحميل تقرير الدفعة…</div>';
+  const r = await rpc('batch_report', { p_batch_id: id });
+  const st = r.stats || {}, lines = r.lines || [];
+  const per = lines.filter(l => !l.general), gen = lines.filter(l => l.general);
+  $app.innerHTML = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">تقرير الاستخراج</span>`) + `
+  <main class="wrap">
+    <h1 class="rep-title" dir="auto">${esc(r.name)}</h1>
+    <p class="small muted" dir="auto" style="margin:0 0 8px">${esc(r.source_ref || '')}</p>
+    <div class="facts">${st.questions != null ? `<span>الأسئلة: <b>${esc(st.questions)}</b></span>` : ''}${st.incomplete ? `<span>ناقص: <b>${esc(st.incomplete)}</b></span>` : ''}${st.duplicate_year_links ? `<span>مكرر مربوط بسؤال قديم: <b>${esc(st.duplicate_year_links)}</b></span>` : ''}</div>
+    <p class="small muted" style="margin-top:0">كل رقم سؤال (↗) بيفتح السؤال. أرقام السطور هي أرقام الأسئلة في ملف المصدر.</p>
+    ${per.length ? `<ol class="rlist">${per.map(l => repLineHTML(l, null, null)).join('')}</ol>` : ''}
+    ${r.hidden ? `<section class="panel rep-hidden"><p style="margin:0">🔒 فيه ${esc(r.hidden)} ${r.hidden === 1 ? 'سطر' : 'سطور'} لأسئلة لسه ماتحلّتش، هتظهر هنا أول ما تتحل.</p></section>` : ''}
+    ${gen.length ? `<h3 class="dayh">على الدفعة كلها</h3><ol class="rlist">${gen.map(l => repLineHTML(l, null, null)).join('')}</ol>` : ''}
+    ${!lines.length && !r.hidden ? '<div class="empty">التقرير فاضي.</div>' : ''}
+  </main>`;
+  document.getElementById('back').onclick = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = ''; };
+  scrollTo(0, 0);
+}
+window.addEventListener('hashchange', e => { S.cameFromApp = !!(e.oldURL && e.oldURL.split('#')[0] === location.href.split('#')[0]); });
+
+/* ---------- 3.9: source page viewer (integration_backlog 23) ----------
+   Each PDF page is an image in the private bucket "source-pages" (table source_files says where, and the page offset:
+   PDF page = printed page + offset). Opened with a 1-hour signed link, so phones need no PDF viewer.
+   Pinch or double-tap to zoom, drag to move, buttons for the neighbouring pages (a question may continue there). */
+const PageUrls = {};
+async function pageUrl(src, n) {
+  const path = `${src.prefix}/p${String(n).padStart(3, '0')}.${src.ext || 'webp'}`;
+  const hit = PageUrls[path]; if (hit && Date.now() - hit.at < 50 * 60000) return hit.url;
+  const { data, error } = await sb.storage.from(src.bucket || 'source-pages').createSignedUrl(path, 3600);
+  if (error || !data?.signedUrl) throw error || new Error('no url');
+  PageUrls[path] = { url: data.signedUrl, at: Date.now() };
+  return data.signedUrl;
+}
+function openPageViewer(src, start) {
+  if (!src || !start) return;
+  closeSheets();
+  const total = Math.max(src.page_count || start, start), off = src.page_offset || 0;
+  let page = start, zoom = 1, seq = 0, closed = false;
+  const sc = document.createElement('div'); sc.className = 'scrim pv';
+  sc.innerHTML = `<div class="pv-box" role="dialog" aria-modal="true" aria-label="صفحة المصدر">
+    <div class="pv-bar">
+      <button class="pv-b" type="button" data-pv="close" aria-label="إغلاق">✕</button>
+      <div class="pv-title"><b id="pv-t"></b><span id="pv-s"></span></div>
+      <button class="pv-b" type="button" data-pv="out" aria-label="تصغير">−</button><button class="pv-b" type="button" data-pv="in" aria-label="تكبير">+</button>
+    </div>
+    <div class="pv-stage" id="pv-stage" dir="ltr"><img id="pv-img" alt="صفحة من ملف المصدر" draggable="false"><div class="pv-msg" id="pv-msg" role="status"></div></div>
+    <div class="pv-nav"><button class="pv-b wide" type="button" data-pv="prev"><span dir="ltr">→</span> الصفحة اللي قبل</button><span class="pv-hint">كبّر بصباعين أو اضغط مرتين</span><button class="pv-b wide" type="button" data-pv="next">الصفحة اللي بعد <span dir="ltr">←</span></button></div>
+  </div>`;
+  document.body.appendChild(sc);
+  const $ = sel => sc.querySelector(sel);
+  const stage = $('#pv-stage'), img = $('#pv-img'), msg = $('#pv-msg');
+  const setZoom = (z, px, py) => {                      // keep the point under the fingers where it is
+    z = Math.min(5, Math.max(1, z)); if (Math.abs(z - zoom) < 0.001) return;
+    const w = stage.clientWidth, h = stage.clientHeight;
+    px = px ?? w / 2; py = py ?? h / 2;
+    const fx = stage.scrollLeft + px, fy = stage.scrollTop + py, k = z / zoom;
+    zoom = z; img.style.width = `${z * 100}%`;
+    stage.scrollLeft = fx * k - px; stage.scrollTop = fy * k - py;
+    stage.classList.toggle('zoomed', z > 1.01);
+  };
+  const load = async n => {
+    page = Math.min(Math.max(1, n), total); zoom = 1; img.style.width = '100%'; stage.classList.remove('zoomed');
+    const printed = page - off;
+    $('#pv-t').textContent = (printed >= 1 ? `صفحة ${printed}` : 'الغلاف') + (page === start ? ' · صفحة السؤال' : '');
+    $('#pv-s').textContent = `رقم ${page} من ${total} في الملف`;
+    $('[data-pv="prev"]').disabled = page <= 1; $('[data-pv="next"]').disabled = page >= total;
+    img.classList.add('pv-wait'); msg.textContent = 'جاري تحميل الصفحة…'; msg.hidden = false;
+    const my = ++seq;
+    try { const u = await pageUrl(src, page); if (my === seq && !closed) img.src = u; }
+    catch { if (my === seq) msg.textContent = 'صورة الصفحة دي مش متاحة لسه (ممكن تكون لسه ماترفعتش). جرّب تاني بعدين.'; }
+  };
+  img.onload = () => {
+    msg.hidden = true; img.classList.remove('pv-wait'); stage.scrollTop = 0; stage.scrollLeft = 0;
+    const c = navigator.connection;
+    if (!(c && (c.saveData || /2g/.test(c.effectiveType || ''))) && page < total) pageUrl(src, page + 1).then(u => { const i = new Image(); i.src = u; }).catch(() => { });
+  };
+  img.onerror = () => { if (img.getAttribute('src')) { msg.textContent = 'تعذّر تحميل الصورة. تأكد من الاتصال وحاول تاني.'; msg.hidden = false; } };
+  // two fingers: zoom around their middle; double tap: zoom in there / back to the whole width
+  let pinch = null, raf = 0, last = null, tap = null;
+  const mid = (a, b) => { const r = stage.getBoundingClientRect(); return [(a.clientX + b.clientX) / 2 - r.left, (a.clientY + b.clientY) / 2 - r.top]; };
+  stage.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) { const [a, b] = e.touches; pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1, z: zoom }; tap = null; e.preventDefault(); }
+    else if (e.touches.length === 1) tap = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+  }, { passive: false });
+  stage.addEventListener('touchmove', e => {
+    if (tap && e.touches.length === 1 && Math.hypot(e.touches[0].clientX - tap.x, e.touches[0].clientY - tap.y) > 10) tap = null;
+    if (!pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    const [a, b] = e.touches, [px, py] = mid(a, b);
+    last = [pinch.z * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / pinch.d, px, py];
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (last) setZoom(...last); });
+  }, { passive: false });
+  let lastTap = null;
+  stage.addEventListener('touchend', e => {
+    if (e.touches.length < 2) pinch = null;
+    if (!tap || e.touches.length) return;
+    const now = Date.now(); if (now - tap.t > 300) { tap = null; return; }
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(tap.x - lastTap.x, tap.y - lastTap.y) < 40) {
+      const r = stage.getBoundingClientRect(); setZoom(zoom > 1.2 ? 1 : 2.5, tap.x - r.left, tap.y - r.top); lastTap = null; e.preventDefault();
+    } else lastTap = { ...tap, t: now };
+    tap = null;
+  }, { passive: false });
+  stage.addEventListener('dblclick', e => { const r = stage.getBoundingClientRect(); setZoom(zoom > 1.2 ? 1 : 2.5, e.clientX - r.left, e.clientY - r.top); });
+  stage.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); const r = stage.getBoundingClientRect(); setZoom(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  // mouse: drag to move when zoomed in
+  let drag = null;
+  stage.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' || zoom <= 1.01) return; drag = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop }; stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener('pointermove', e => { if (!drag) return; stage.scrollLeft = drag.l - (e.clientX - drag.x); stage.scrollTop = drag.t - (e.clientY - drag.y); });
+  const endDrag = () => { drag = null; }; stage.addEventListener('pointerup', endDrag); stage.addEventListener('pointercancel', endDrag);
+  sc.addEventListener('gesturestart', e => e.preventDefault());   // iOS: no page zoom behind the viewer
+  const close = () => {
+    if (closed) return true; closed = true; seq++; sheetClose = null;
+    document.removeEventListener('keydown', onKey); sc.remove();
+    return true;
+  };
+  const onKey = e => {
+    if (e.key === 'Escape') history.state?.pv ? history.back() : close();
+    else if (e.key === 'ArrowLeft') load(page + 1); else if (e.key === 'ArrowRight') load(page - 1);
+    else if (e.key === '+' || e.key === '=') setZoom(zoom * 1.25); else if (e.key === '-') setZoom(zoom / 1.25);
+  };
+  document.addEventListener('keydown', onKey);
+  sc.querySelectorAll('[data-pv]').forEach(bt => bt.onclick = () => {
+    const k = bt.dataset.pv;
+    if (k === 'close') { history.state?.pv ? history.back() : close(); }
+    else if (k === 'prev') load(page - 1); else if (k === 'next') load(page + 1);
+    else if (k === 'in') setZoom(zoom * 1.4); else if (k === 'out') setZoom(zoom / 1.4);
+  });
+  // the phone's back button closes the viewer (same mechanism as the sheets)
+  sheetClose = close; history.pushState({ sheet: true, pv: true }, '');
+  $('[data-pv="close"]').focus();
+  load(start);
 }
 
 /* ---------- team activity + question timeline ---------- */
@@ -710,7 +930,7 @@ function renderQuestion() {
 
   const facts = [
     years ? `<span>ورد في: <b>${esc(years)}</b></span>` : '',
-    q.source_question_no ? `<span>رقمه في المصدر: <b>${esc(q.source_question_no)}</b>${q.source_page ? ` (صفحة ${esc(q.source_page)})` : ''}</span>` : '',
+    q.source_question_no ? `<span>رقمه في المصدر: <b>${esc(q.source_question_no)}</b>${q.source_page ? ` (صفحة ${esc(q.source_page)})` : ''}${b.source?.pdf_page ? ` <button class="linkbtn pglink" type="button" data-page="${Number(b.source.pdf_page)}">📄 افتح الصفحة</button>` : ''}</span>` : '',
     tax.chapter ? `<span>الشابتر: <b>${esc(tax.chapter.map(x => x.name).join('، '))}</b></span>` : '',
     `<span>الحالة: <b>${esc(STATUS_AR[q.status] || q.status)}</b></span>`
   ].join('');
@@ -766,8 +986,9 @@ function renderQuestion() {
 
   const ref = b.reference ? `${esc(b.reference.name)}${b.reference.edition ? ` (${esc(b.reference.edition)})` : ''}` : '';
   const refLine = (ref || v.reference_detail) ? `<p class="ref"><b>المرجع</b><span class="refv">${ref}${ref && v.reference_detail ? '<br>' : ''}${T(v.reference_detail, base?.reference_detail)}</span></p>` : '';
-  const hand = q.handwritten_note ? `
-    <section class="panel hand"><h3>${HAND_LABEL}</h3><div class="pre" dir="auto">${esc(q.handwritten_note)}</div>
+  const split = splitAlert(q.handwritten_note);   // 3.9: the "⚠️ للمراجع" block gets its own card; the note is shown without it
+  const hand = split.main.trim() || q.handwritten_image_path ? `
+    <section class="panel hand"><h3>${HAND_LABEL}</h3>${split.main.trim() ? `<div class="pre" dir="auto">${esc(split.main)}</div>` : ''}
       ${q.handwritten_image_path ? `<img id="handimg" alt="صورة الملاحظة الأصلية" style="max-width:100%;margin-top:10px;border-radius:8px">` : ''}</section>` : '';
   const studentNote = v.student_note ? `<section class="panel"><h3>ملاحظة للطلاب (تظهر في التطبيق)</h3><div class="pre" dir="auto">${T(v.student_note, base?.student_note)}</div></section>` : '';
   const hist = timelineHTML(S.timeline, q.status === 'approved');
@@ -802,6 +1023,8 @@ function renderQuestion() {
     ${studentLine(b.student_state, true)}
     ${draftPanels}
     ${verdict}
+    ${alertCardHTML(split.alert, b.source)}
+    ${reportSectionHTML(q)}
     ${reqPanel}
     ${round2}
     ${incomplete}
@@ -870,6 +1093,8 @@ function renderQuestion() {
   if (q.handwritten_image_path) signed('handwritten-crops', q.handwritten_image_path).then(u => { const im = document.getElementById('handimg'); if (im && u) im.src = u; });
   $app.querySelectorAll('audio[data-voice]').forEach(a => signed('voice-notes', a.dataset.voice).then(u => { if (u) a.src = u; }));
   attachSwipe(document.getElementById('qmain'), () => go(nav.next), () => go(nav.prev));
+  $app.querySelectorAll('[data-page]').forEach(bt => bt.onclick = () => openPageViewer(b.source, Number(bt.dataset.page)));
+  bindReportSection(q);
 }
 function labelType(v) { const t = (S.bundle?.revision_types || []).find(x => x.value === v); return t ? t.label : (v || ''); }
 async function signed(bucket, path) { const { data } = await sb.storage.from(bucket).createSignedUrl(path, 3600); return data?.signedUrl || null; }
