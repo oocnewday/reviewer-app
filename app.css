@@ -495,3 +495,31 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .svlink{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:6px 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--cobalt);font-size:.88rem;font-weight:600;text-decoration:none;white-space:nowrap}
 .svlink:hover{background:var(--cobalt-2)}
 .svlink:active{transform:translateY(1px)}
+/* v4.8 chapter cards (item 92 phase 2) */
+.staff .chap{border-top:1px solid var(--line-2);padding:12px 0 4px}
+.staff .chap-h{font-size:1rem;margin-bottom:2px}
+.staff .chap .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.staff .chsteps{list-style:none;margin:8px 0 0;padding:0}
+.staff .chstep{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:6px 10px;border-inline-start:3px solid var(--line-2);margin:4px 0;border-radius:6px}
+.staff .chstep .grow{flex:1;min-width:160px}
+.staff .chstep.rec{border-inline-start-color:var(--cobalt);background:var(--cobalt-2);padding:10px}
+.sheet input.ci{width:100%;border:1px solid var(--line);background:var(--surface);color:inherit;border-radius:10px;padding:10px 12px;min-height:44px;font:inherit}
+.sheet input[type=file]{max-width:100%}
+.sheet .store-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0 4px;font-weight:600}
+.sheet .infobtn{border:1px solid var(--cobalt);color:var(--cobalt);background:var(--surface);border-radius:999px;padding:4px 12px;font:inherit;font-size:.85rem;min-height:36px;cursor:pointer}
+.sheet .help-box{background:var(--cobalt-2);border-radius:10px;padding:10px 14px;margin:6px 0;font-size:.92rem;line-height:1.7}
+.sheet .help-box p{margin:6px 0}
+.sheet label.chk{display:flex;align-items:center;gap:8px;margin:12px 0 4px;font-weight:600;min-height:44px}
+.sheet label.chk input{width:22px;height:22px}
+.rsv-row{margin-top:10px;text-align:center}
+.rsv-row .linkbtn{font-size:.92rem}
+/* 4.8 question versions, before/after (migration 043) */
+.vers{list-style:none;margin:8px 0 0;padding:0}
+.vers li{padding:8px 0;border-top:1px solid var(--line-2)}
+.vers li:first-child{border-top:0}
+.cmpb{font-size:.85rem;padding:0}
+.cmp-head{margin-bottom:8px;line-height:1.7}
+.cmpf{margin:8px 0}
+.cmpf.chg{border-inline-start:3px solid var(--amber);padding:6px 10px;background:var(--surface);border-radius:6px}
+.cmpf .cmpt{font-weight:600;margin-bottom:4px}
+.cmpf .pre{white-space:pre-wrap}

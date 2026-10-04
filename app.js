@@ -2,13 +2,18 @@
 const SUPABASE_URL = 'https://djqsffknczddefukbuzu.supabase.co';
 // Public (anon) key: safe to ship in a web page; every table is protected by RLS.
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcXNmZmtuY3pkZGVmdWtidXp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxOTE0NDUsImV4cCI6MjEwNTc2NzQ0NX0.-4r_Mp6GKRLLoqotKPEDmFglsZOnyHrRpuo5j3klIcE';
-const DOC_URL = 'https://claude.ai/code/artifact/aa2a7b7c-a88d-41f2-b4d9-7e79ff8c5b67';
-const MSG_SOLVE = `المستند: ${DOC_URL} – هذه محادثة حل معزول. اقرأ 'معايير الشرح' و'أدوات محادثة الحل'، ثم استخدم next_unsolved وحل بـ save_solution، وللمختلف فقط reveal_source ثم set_disagreement_reason.`;
-const MSG_REVISE = `المستند: ${DOC_URL} – نفّذ التعديلات المعلقة: اقرأ reviews المفتوحة، أنشئ نسخًا جديدة، اكتب resolution_note، وراجع الأسئلة التي عليها needs_consistency_check.`;
+// Main project doc. The copy buttons hand a new Claude chat a short pointer; the full chat messages live in the doc (v4.8, item 92 phase 1).
+const DOC_URL = 'https://claude.ai/artifact/N1k7faWZATPnTFg7AoUyft';
+const chatMsg = role => `دورك: ${role} (بنك أسئلة OOC).\nاقرا بأدوات Claude Docs من المستند الرئيسي، قسم "رسائل البداية الجاهزة"، رسالة "${role}"، ونفّذها بالحرف. ماتقراش أي حاجة تانية إلا اللي الرسالة بتقول عليه.\n${DOC_URL}`;
+const MSG_SOLVE = chatMsg('محادثة حل معزول');
+const MSG_REVISE = chatMsg('محادثة تنفيذ التعديلات');
+// Chapter card (v4.8, item 92 phase 2): the batch line (and the attached file for extraction) ride under the same short text.
+const msgExtract = (batch, file) => `${chatMsg('محادثة استخراج')}\nالدفعة: ${batch}\nالملف المرفق: ${file}`;
+const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '4.7';
-const APP_BUILD = '28/9/2026';
+const APP_VERSION = '4.8';
+const APP_BUILD = '4/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -70,6 +75,20 @@ const fail = e => notify('لم يتم الإجراء', errText(e), 'err', 6000);
 function errText(e) {
   const m = (e && (e.message || e.error_description || e.msg)) || String(e);
   if (/Not allowed/i.test(m)) return 'ليست لديك صلاحية على هذا السؤال.';
+  // 4.8: return to solving (backlog 37, migration 043)
+  if (/NOT_IN_REVIEW/.test(m)) return 'السؤال ده رجع للحل أو لسه ماتحلّش، فمش هينفع تراجعه دلوقتي. ارجع للقائمة وحدّثها.';
+  if (/QUESTION_CHANGED/.test(m)) return 'السؤال اتغيّر من ساعة ما فتحته (حد عدّله أو اعتمده). ارجع للسؤال وافتحه تاني.';
+  if (/RESOLVE_STATUS/.test(m)) return 'السؤال ده مش في حالة ينفع ترجّعه فيها للحل.';
+  if (/Resolve reason too short/i.test(m)) return 'اكتب السبب في كلمتين على الأقل.';
+  if (/Not allowed to return question/i.test(m)) return 'الرجوع للحل لصلاحية 3 والإدارة بس.';
+  // 4.8: chapter card (migration 039)
+  if (/DUPLICATE_FILE/.test(m)) return 'الملف ده متسجّل قبل كده باسمه ده. لو هو نفس الشابتر، كمّل من كارته في لوحة الإدارة. ولو شابتر تاني، غيّر اسم الملف وارفعه.';
+  if (/File must be a PDF/i.test(m)) return 'لازم الملف يكون PDF، واسمه من غير / أو \\.';
+  if (/larger than 50 MB/i.test(m) || /exceeded the maximum allowed size|Payload too large/i.test(m)) return 'الملف أكبر من 50 ميجا. صغّره (مثلًا اطبعه PDF بجودة أقل) وجرّب تاني.';
+  if (/DRIVE_LINK/.test(m)) return 'لينك درايف لازم يبدأ بـ https://drive.google.com/';
+  if (/Chapter name is required/i.test(m)) return 'اكتب اسم الشابتر.';
+  if (/Source is required/i.test(m)) return 'اكتب المصدر.';
+  if (/Admins only/i.test(m)) return 'الجزء ده للإدارة بس.';
   // 4.1: decide_duplicate / undo_duplicate (migration 037)
   if (/Not your duplicate decision/i.test(m)) return 'القرار ده أخده مراجع تاني، والتراجع عنه لصاحبه أو للإدارة.';
   if (/Duplicate already decided/i.test(m)) return 'الزوج ده اتاخد فيه قرار بالفعل. حدّث الصفحة.';
@@ -91,9 +110,20 @@ function errText(e) {
   if (/Failed to fetch|NetworkError/i.test(m)) return 'لا يوجد اتصال بالإنترنت. تأكد من الاتصال وحاول مرة أخرى.';
   return m;
 }
+// 4.8 (review (ع)): a page opened before the question went back to solving – say so plainly and refresh it
+// (drafts are already saved on every keystroke, so closing the open sheet loses nothing)
+function staleQuestion() {
+  S.dirty = true;
+  if (!location.hash.startsWith('#q/')) return;
+  setTimeout(() => {
+    closeSheets();
+    notify('السؤال ده رجع للحل من جديد', 'حد من الفريق رجّعه للحل وإنت فاتح الصفحة، فمراجعته هتبقى بعد ما يتحل. الصفحة اتحدّثت.', 'info');
+    reloadQuestion().catch(e => console.warn('reload after NOT_IN_REVIEW:', e));
+  }, 0);
+}
 async function rpc(fn, args) {
   const { data, error } = await sb.rpc(fn, args || {});
-  if (error) throw error;
+  if (error) { if (/NOT_IN_REVIEW/.test(error.message || '')) staleQuestion(); throw error; }
   return data;
 }
 async function copyText(text) {
@@ -418,9 +448,13 @@ async function loadQueue() {
   rpc('team_activity_new_count', { p_since: since }).then(n => { S.newCount = n || 0; const bd = document.getElementById('feed-n'); if (bd) { bd.textContent = S.newCount; bd.classList.toggle('hidden', !S.newCount); } }).catch(() => { });
   const rb = rpc('rebuild_queue').catch(() => []);   // empty for anyone below access 3
   const tasks = [rpc('reviewer_questions'), rpc('reviewer_notices'), Drafts.pull(), loadStudentUrl()];
-  if (S.isAdmin) tasks.push(rpc('pipeline_status').catch(() => null));
-  const [q, n, , , p] = await Promise.all(tasks);
-  S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
+  if (S.isAdmin) {
+    tasks.push(rpc('pipeline_status').catch(() => null));
+    // v4.8: chapter cards (migration 039). Missing function or no network: the panel falls back to the two 4.7-style rows.
+    tasks.push(rpc('chapter_runs_status').catch(e => { console.warn('chapter_runs_status:', e && e.message); return null; }));
+  }
+  const [q, n, , , p, ch] = await Promise.all(tasks);
+  S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.chapters = Array.isArray(ch) ? ch : null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
   S.queue = S.rows.filter(FOLDERS[0].test);
   S.rebuild = (await rb) || [];
   fixView();
@@ -465,10 +499,11 @@ async function route() {
   if (!S.view) S.view = loadView();
   const m = location.hash.match(/^#q\/(\d+)/);
   try {
-    const rm = location.hash.match(/^#report\/(\d+)/), bm = location.hash.match(/^#rebuild\/(\d+)/);
+    const rm = location.hash.match(/^#report\/(\d+)/), bm = location.hash.match(/^#rebuild\/(\d+)/), sm = location.hash.match(/^#resolve\/(\d+)/);
     if (location.hash === '#activity') { if (!S.rows.length) await loadQueue(); await renderActivity(false); }
     else if (rm) await renderBatchReport(Number(rm[1]));
     else if (bm) await renderRebuild(Number(bm[1]));
+    else if (sm) await renderRebuild(Number(sm[1]), 'resolve');
     else if (m) await openQuestion(Number(m[1]));
     else {
       closeSheets();
@@ -481,7 +516,7 @@ async function route() {
 }
 let lastHash = location.hash;
 window.addEventListener('hashchange', () => {
-  const inQ = h => h.startsWith('#q/') || h.startsWith('#rebuild/');
+  const inQ = h => h.startsWith('#q/') || h.startsWith('#rebuild/') || h.startsWith('#resolve/');
   if (!inQ(lastHash) && !lastHash.startsWith('#report/') && lastHash !== '#activity' && inQ(location.hash)) S.listScroll = scrollY;   // leaving the list
   if (!location.hash) { /* back to list keeps listScroll */ } else if (!inQ(location.hash) && !location.hash.startsWith('#report/')) S.listScroll = 0;
   lastHash = location.hash;
@@ -582,7 +617,11 @@ function renderQueue() {
     if (!S.rows.some(x => x.qid === n)) notify(`السؤال رقم ${n} مش ضمن فولدراتك`, 'هحاول أفتحه لو عندك صلاحية عليه.', 'info');
     location.hash = `#q/${n}`;
   };
-  $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText(b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE));
+  $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText((S.copyMsgs || {})[b.dataset.copy] || (b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE)));
+  const ncb = document.getElementById('nc-open'); if (ncb) ncb.onclick = () => openNewChapter();
+  $app.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.link)); if (c) openDriveLink(c); });
+  $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
+  $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
   bindInstall();
   const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
   if (S.isAdmin && S.pipeline) loadSolver();
@@ -761,9 +800,78 @@ async function reloadQuestion() {
   const qid = S.qid, y = scrollY;
   const [b, tl] = await Promise.all([rpc('question_bundle', { p_qid: qid }), rpc('question_timeline', { p_qid: qid }).catch(() => null), loadQueue().catch(() => { })]);
   if (S.qid !== qid || !b || location.hash !== `#q/${qid}`) return;
-  S.bundle = b; S.timeline = tl || [];
+  S.bundle = b; S.timeline = tl || []; delete VerCache[qid];
   renderQuestion(); scrollTo(0, y);
 }
+
+/* ---------- 4.8: question versions, before/after (migration 043 question_versions) ---------- */
+const VerCache = {};
+async function loadVersions(qid, fresh) {
+  if (!fresh && VerCache[qid]) return VerCache[qid];
+  const list = await rpc('question_versions', { p_qid: qid });
+  if (!Array.isArray(list)) throw new Error('Not allowed');
+  return (VerCache[qid] = list);
+}
+const verLabel = v => {
+  const l = v.label || '';
+  if (l === 'reviewer_completion') return /^Returned to solving/.test(v.note || '') ? '🔁 رجّعه للحل' : '🛠️ إعادة تركيب';
+  return { claude_extraction: '📥 الاستخراج', claude_solver: '🤖 حل Claude', claude_api_solver: '🤖 المحلّل الآلي', claude_revision: '🤖 تنفيذ Claude لطلب تعديل', claude: '🤖 تعديل Claude', reviewer_quick_edit: '⚡ تعديل سريع', reviewer: '📝 تعديل المراجع' }[l] || l;
+};
+function versionsHTML(list) {
+  if (!list.length) return '<p class="small muted">مفيش نسخ.</p>';
+  return `<ol class="vers">${list.slice().reverse().map((v, i, arr) => `<li><div><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}</div>
+    <div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}<time datetime="${esc(v.at)}">${esc(ago(v.at))}</time>${i < arr.length - 1 ? ` · <button class="linkbtn cmpb" type="button" data-cmp-q="${Number(S.qid)}" data-cmp-v="${Number(v.version_no)}">🔍 قارن باللي قبلها</button>` : ''}</div></li>`).join('')}</ol>`;
+}
+function bindVersions() {
+  const d = document.getElementById('vers'); if (!d) return;
+  d.addEventListener('toggle', async () => {
+    if (!d.open || d.dataset.loaded) return;
+    const body = document.getElementById('vers-body'), qid = S.qid;
+    try { const list = await loadVersions(qid, true); if (S.qid !== qid) return; d.dataset.loaded = '1'; body.className = ''; body.innerHTML = versionsHTML(list); }
+    catch (e) { console.warn('question_versions:', e); body.textContent = errText(e); }
+  });
+}
+// one field: unchanged = one quiet line; changed = the new text with the changes marked (deleted struck, added highlighted)
+function cmpField(title, before, after) {
+  const a = before || '', b = after || '';
+  if (a === b) return a ? `<div class="cmpf same"><span class="small muted">${esc(title)}: زي ما هو</span></div>` : '';
+  return `<div class="cmpf chg"><div class="cmpt">${esc(title)} <span class="tag amber">اتغيّر</span></div><div class="pre" dir="auto">${a ? diffHTML(a, b) : `<mark class="ins">${nl(b)}</mark>`}</div></div>`;
+}
+const optLine = o => `${o.key}) ${o.text || ''}${o.is_correct ? '  ✓' : ''}`;
+function compareHTML(prev, v) {
+  const pk = (prev.options || []).map(o => o.key).join(), vk = (v.options || []).map(o => o.key).join();
+  const sameSet = pk === vk && JSON.stringify((prev.options || []).map(o => o.text)) === JSON.stringify((v.options || []).map(o => o.text));
+  let opts = '';
+  if (!sameSet) {
+    opts = cmpField('الاختيارات', (prev.options || []).map(optLine).join('\n'), (v.options || []).map(optLine).join('\n'));
+  } else {
+    opts = (v.options || []).map((o, i) => { const p = prev.options[i] || {};
+      return cmpField(`الاختيار ${o.key}: الإجابة`, p.is_correct ? 'صح ✓' : 'غلط', o.is_correct ? 'صح ✓' : 'غلط')
+        + cmpField(`الاختيار ${o.key}: الشرح`, p.explanation, o.explanation) + cmpField(`الاختيار ${o.key}: المزيد`, p.explanation_extra, o.explanation_extra); }).join('');
+  }
+  const body = cmpField('نص السؤال', prev.stem, v.stem) + opts + cmpField('الشرح', prev.explanation_main, v.explanation_main)
+    + cmpField('مزيد من الشرح', prev.explanation_extra, v.explanation_extra)
+    + cmpField('المرجع', [prev.reference, prev.reference_detail].filter(Boolean).join(' – '), [v.reference, v.reference_detail].filter(Boolean).join(' – '))
+    + cmpField('ملاحظة للطلاب', prev.student_note, v.student_note);
+  return body.includes('cmpf chg') ? body : '<p class="small muted">مفيش فرق في المحتوى بين النسختين.</p>' + body;
+}
+async function openCompare(qid, vn) {
+  const { sheet } = openSheet(`<div class="sheet-head"><h2>🔍 قبل وبعد</h2></div><div id="cmp-body" class="small muted">جاري التحميل…</div>`);
+  const body = sheet.querySelector('#cmp-body');
+  try {
+    const list = await loadVersions(qid, !VerCache[qid] || !VerCache[qid].some(x => Number(x.version_no) === vn));
+    const idx = list.findIndex(x => Number(x.version_no) === vn);
+    if (idx < 1) { body.textContent = 'مفيش نسخة قبل دي.'; return; }
+    const v = list[idx], prev = list[idx - 1];
+    body.className = '';
+    body.innerHTML = `<div class="cmp-head"><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}<div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}${esc(ago(v.at))}، مقارنة بالنسخة ${esc(prev.version_no)} (${esc(verLabel(prev))})</div>${v.note ? `<div class="small" dir="auto">${nl(v.note)}</div>` : ''}</div>
+      <p class="hint">المشطوب اتشال، والمتعلّم عليه اتضاف.</p>${compareHTML(prev, v)}`;
+  } catch (e) { console.warn('compare:', e); body.textContent = errText(e); }
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('[data-cmp-v]'); if (!b) return;
+  e.preventDefault(); openCompare(Number(b.dataset.cmpQ), Number(b.dataset.cmpV));
+});
 
 /* ---------- 3.9: extraction report (integration_backlog 25) ----------
    import_batches stays admin-only; reviewers read it through question_report / batch_report (migration 030).
@@ -839,20 +947,38 @@ function rbItem(r) {
       <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${tags}</div></span>
     </a></li>`;
 }
-async function renderRebuild(qid) {
+/* 4.8 (backlog 37): the same screen, mode 'resolve', sends a SOLVED question back to isolated solving (resolve_question,
+   migration 043): text and options pre-filled from the current version, a reason instead of the team note, and the
+   current version id travels with the save so a change made meanwhile is refused (QUESTION_CHANGED). */
+const RESOLVE_STATES = ['in_review', 'needs_revision', 'revised', 'approved'];
+async function renderRebuild(qid, mode = 'rebuild') {
+  const RS = mode === 'resolve', DK = RS ? 'resolve' : 'rebuild';
   stopSolverTimer(); closeSheets(); S.bundle = null; S.qid = null;
   $app.innerHTML = '<div class="loading">جاري تحميل السؤال…</div>';
   if (!S.draftsLoaded) { Drafts.load(); S.draftsLoaded = true; }
-  S.rebuild = (await rpc('rebuild_queue')) || [];
-  const r = S.rebuild.find(x => x.qid === qid);
-  const back = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = ''; };
-  const head = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">إعادة تركيب السؤال</span>`);
+  let r = null, verId = null;
+  if (RS) {
+    const b = await rpc('question_bundle', { p_qid: qid }).catch(e => { console.warn('resolve bundle:', e); return null; });
+    const q = b && b.question, v = (b && b.current_version) || {};
+    if (q && (b.my_access || 0) >= 3 && RESOLVE_STATES.includes(q.status)) {
+      verId = v.id;
+      r = { qid: q.qid, qid_display: q.qid_display, chapter: ((b.taxonomy || {}).chapter || []).map(x => x.name).join('، '),
+            years: ((b.taxonomy || {}).year || []).map(x => x.name).join('، '), source_question_no: q.source_question_no, source_page: q.source_page,
+            source: b.source, stem: v.stem, options: (v.options || []).slice().sort((x, y) => String(x.key).localeCompare(String(y.key))),
+            source_answer: q.source_answer, source_answer_text: q.source_answer_text, handwritten_note: q.handwritten_note, reasons: [], student_note: v.student_note };
+    }
+  } else {
+    S.rebuild = (await rpc('rebuild_queue')) || [];
+    r = S.rebuild.find(x => x.qid === qid);
+  }
+  const back = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = RS ? `#q/${qid}` : ''; };
+  const head = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">${RS ? 'رجّعه للحل من جديد' : 'إعادة تركيب السؤال'}</span>`);
   if (!r) {
-    $app.innerHTML = head + `<main class="wrap"><div class="empty"><p>السؤال رقم ${esc(String(qid))} مش مستني إعادة تركيب: يمكن اتكمّل خلاص، أو مش ضمن صلاحيتك.</p></div></main>`;
+    $app.innerHTML = head + `<main class="wrap"><div class="empty"><p>${RS ? `السؤال رقم ${esc(String(qid))} مش في حالة ينفع ترجّعه فيها للحل، أو الرجوع للحل مش ضمن صلاحيتك (صلاحية 3 والإدارة).` : `السؤال رقم ${esc(String(qid))} مش مستني إعادة تركيب: يمكن اتكمّل خلاص، أو مش ضمن صلاحيتك.`}</p></div></main>`;
     document.getElementById('back').onclick = back;
     return;
   }
-  const saved = Drafts.get(qid, 'rebuild');
+  const saved = Drafts.get(qid, DK);
   const hasSrc = !!(r.source_answer_text || r.source_answer);
   const cur = r.options || [];
   const ta = (id, val, cls = 'en', rows = 2) => `<textarea class="t ${cls}" id="${id}" rows="${rows}"${cls ? '' : ' dir="auto"'}>${esc(val || '')}</textarea>`;
@@ -861,7 +987,8 @@ async function renderRebuild(qid) {
     <h1 class="rep-title">السؤال ${esc(r.qid_display)}</h1>
     <div class="facts">${r.chapter ? `<span>الشابتر: <b>${esc(r.chapter)}</b></span>` : ''}${r.years ? `<span>السنة: <b>${esc(r.years)}</b></span>` : ''}${r.source_question_no ? `<span>رقمه في المصدر: <b>${esc(r.source_question_no)}</b>${r.source_page ? ` (صفحة ${esc(r.source_page)})` : ''}</span>` : ''}</div>
     ${r.source?.pdf_page ? '<p><button class="btn sec" type="button" id="rb-page">📄 افتح صفحة المصدر</button></p>' : ''}
-    <section class="panel"><h3>ليه السؤال هنا</h3><ul class="rb-why">${(r.reasons || []).map(x => `<li><b>${esc(RB_SRC[x.source] || x.source)}:</b> <span dir="auto">${esc(rbReason(x))}</span></li>`).join('')}</ul></section>
+    ${RS ? `<section class="panel warn"><h3>إيه اللي هيحصل</h3><ul class="rb-why"><li>السؤال هيختفي عن الطلاب، ويرجع "ينتظر الحل"، ومحادثة الحل المعزول هتحله من الأول بالنص والاختيارات الجديدة.</li><li>بعد الحل هيوصل للمراجعة، ومش هيظهر للطلاب غير بعد اعتماد استشاري.</li><li>الاعتمادات وطلبات التعديل المفتوحة القديمة هتتلغي، وتفضل في "تاريخ السؤال"، وكل النسخ القديمة بتفضل محفوظة.</li><li>للتعديل الصغير (كلمة أو توضيح) استخدم طلب التعديل أو التعديل السريع.</li></ul></section>${r.student_note ? `<section class="panel"><h3>ملاحظة الطلاب الحالية</h3><div class="pre" dir="auto">${nl(r.student_note)}</div><p class="hint">مش هتتنقل لوحدها للنسخة الجديدة، لأن النص هيتغير. لو لسه مناسبة، ضيفها تاني بزرار "📝 ملاحظة للطلاب" وإنت بتعتمد بعد الحل.</p></section>` : ''}`
+      : `<section class="panel"><h3>ليه السؤال هنا</h3><ul class="rb-why">${(r.reasons || []).map(x => `<li><b>${esc(RB_SRC[x.source] || x.source)}:</b> <span dir="auto">${esc(rbReason(x))}</span></li>`).join('')}</ul></section>`}
     <section class="panel"><h3>رد المصدر</h3>
       ${hasSrc ? `${r.source_answer_text ? `<p class="rb-src" dir="auto">${nl(r.source_answer_text)}</p>` : ''}${r.source_answer ? `<p class="small muted">الحرف المتسجل في المصدر: <b>${esc(r.source_answer)}</b>، والحروف هتتغير مع الترتيب الجديد.</p>` : ''}`
         : '<p class="small muted" style="margin:0">المصدر مالوش رد متسجل للسؤال ده.</p>'}
@@ -875,11 +1002,13 @@ async function renderRebuild(qid) {
       <div class="letters" id="rb-match" role="group" aria-labelledby="rb-m-l">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-m="${n}" aria-pressed="false">${n}</button>`).join('')}<button type="button" data-m="0" aria-pressed="false">ولا واحد</button></div>
       <p class="hint">لو اخترت رقم، المقارنة بعد الحل بتحصل لوحدها. \"ولا واحد\" معناه إنك شايف رد المصدر مش ضمن الاختيارات، والمقارنة هتبقى عليك.</p>` : ''}
     <label class="f" for="rb-ref">المرجع اللي الاختيارات جاية منه (مطلوب)</label><input class="t" id="rb-ref" dir="auto" placeholder="مثال: Kanski 9th ed., p. 350">
-    <label class="f" for="rb-note">ملاحظة للفريق (اختياري)</label>${ta('rb-note', '', '', 2)}
-    <p class="hint">المرجع والملاحظة بيظهروا في تاريخ السؤال للفريق بس، ومابيوصلوش لـ Claude وقت الحل.</p>
+    ${RS ? `<label class="f" for="rb-reason">السبب (مطلوب، كلمتين على الأقل)</label>${ta('rb-reason', '', '', 2)}
+    <p class="hint">المرجع والسبب بيظهروا في تاريخ السؤال ونشاط الفريق للفريق بس، ومابيوصلوش لـ Claude وقت الحل.</p>`
+      : `<label class="f" for="rb-note">ملاحظة للفريق (اختياري)</label>${ta('rb-note', '', '', 2)}
+    <p class="hint">المرجع والملاحظة بيظهروا في تاريخ السؤال للفريق بس، ومابيوصلوش لـ Claude وقت الحل.</p>`}
     <div class="saved-line" id="rb-saved" aria-live="polite">${saved ? `✓ محفوظ (${esc(draftAge(saved))})` : 'مسودتك بتتحفظ تلقائيًا على جهازك وعلى حسابك.'}</div>
     <div class="err" id="rb-err" role="alert"></div>
-    <div class="rb-foot"><button class="btn ok" id="rb-save" type="button">✓ حفظ وإرجاعه للحل</button><button class="btn warn" id="rb-clear" type="button">✕ مسح المسودة</button></div>
+    <div class="rb-foot"><button class="btn ok" id="rb-save" type="button">✓ ${RS ? 'رجّعه للحل من جديد' : 'حفظ وإرجاعه للحل'}</button><button class="btn warn" id="rb-clear" type="button">✕ مسح المسودة</button></div>
   </main>`;
   const $ = sel => $app.querySelector(sel);
   document.getElementById('back').onclick = back;
@@ -903,18 +1032,18 @@ async function renderRebuild(qid) {
   window.addEventListener('hashchange', unlisten, { once: true });
   const dirty = () => fields.some(x => x.value !== initial[x.id]) || match !== null;
   const persist = () => {
-    if (!dirty()) { if (Drafts.get(qid, 'rebuild')) Drafts.clear(qid, 'rebuild'); return; }
-    Drafts.save(qid, 'rebuild', { fields: Object.fromEntries(fields.filter(x => x.value !== initial[x.id]).map(x => [x.id, x.value])), match });
+    if (!dirty()) { if (Drafts.get(qid, DK)) Drafts.clear(qid, DK); return; }
+    Drafts.save(qid, DK, { fields: Object.fromEntries(fields.filter(x => x.value !== initial[x.id]).map(x => [x.id, x.value])), match });
   };
   fields.forEach(x => x.addEventListener('input', () => { paintMatch(); persist(); }));
   if (mBox) mBox.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { match = Number(b.dataset.m); paintMatch(); persist(); });
-  fields.forEach(x => attachMic(x, x.id === 'rb-note' ? 'ar-EG' : 'en-US'));
+  fields.forEach(x => attachMic(x, x.id === 'rb-note' || x.id === 'rb-reason' ? 'ar-EG' : 'en-US'));
   $('#rb-clear').onclick = async () => {
-    if (!Drafts.get(qid, 'rebuild') && !dirty()) { toast('مفيش مسودة تتمسح.'); return; }
-    if (!confirm('مسح اللي كتبته هنا؟ السؤال هيفضل في الفولدر زي ما هو.')) return;
-    await Drafts.clear(qid, 'rebuild');
-    notify('اتمسحت المسودة', 'السؤال لسه مستني إعادة تركيب.', 'info');
-    renderRebuild(qid);
+    if (!Drafts.get(qid, DK) && !dirty()) { toast('مفيش مسودة تتمسح.'); return; }
+    if (!confirm(RS ? 'مسح اللي كتبته هنا؟ السؤال هيفضل زي ما هو.' : 'مسح اللي كتبته هنا؟ السؤال هيفضل في الفولدر زي ما هو.')) return;
+    await Drafts.clear(qid, DK);
+    notify('اتمسحت المسودة', RS ? 'السؤال زي ما هو.' : 'السؤال لسه مستني إعادة تركيب.', 'info');
+    renderRebuild(qid, mode);
   };
   $('#rb-save').onclick = async () => {
     const err = $('#rb-err'), val = id => $('#' + id).value.trim();
@@ -929,13 +1058,16 @@ async function renderRebuild(qid) {
     const ref = val('rb-ref');
     if (ref.length < 3) { err.textContent = 'اكتب المرجع اللي الاختيارات جاية منه.'; $('#rb-ref').focus(); return; }
     const idx = match ? filled.findIndex(o => o.box === match) + 1 : 0;
-    if (!confirm(`حفظ السؤال ${r.qid_display} وإرجاعه للحل؟\nهيتحفظ كنسخة جديدة، والاختيارات هتترتب عشوائي.`)) return;
+    const reason = RS ? val('rb-reason') : '';
+    if (RS && reason.split(/\s+/).filter(Boolean).length < 2) { err.textContent = 'اكتب السبب في كلمتين على الأقل.'; $('#rb-reason').focus(); return; }
+    if (!confirm(RS ? `ترجّع السؤال ${r.qid_display} للحل من جديد؟\nهيختفي عن الطلاب، والاعتمادات والطلبات المفتوحة القديمة هتتلغي، والاختيارات هتترتب عشوائي.` : `حفظ السؤال ${r.qid_display} وإرجاعه للحل؟\nهيتحفظ كنسخة جديدة، والاختيارات هتترتب عشوائي.`)) return;
     const btn = $('#rb-save'); btn.disabled = true;
     try {
-      await rpc('rebuild_question', { p_qid: qid, p_stem: stem, p_options: filled.map(o => o.text), p_source_match: idx || null, p_reference: ref, p_note: val('rb-note') || null });
-      await Drafts.clear(qid, 'rebuild');
+      if (RS) await rpc('resolve_question', { p_qid: qid, p_expected_version_id: verId, p_stem: stem, p_options: filled.map(o => o.text), p_source_match: idx || null, p_reference: ref, p_reason: reason });
+      else await rpc('rebuild_question', { p_qid: qid, p_stem: stem, p_options: filled.map(o => o.text), p_source_match: idx || null, p_reference: ref, p_note: val('rb-note') || null });
+      await Drafts.clear(qid, DK);
       S.dirty = true;
-      notify(`تم حفظ السؤال ${r.qid_display} بفضل الله`, 'رجع للحل المعزول. بعد ما يتحل هيوصلك في "تنتظرك"، ويفضل مخفي عن الطلاب لحد اعتمادك.');
+      notify(RS ? `السؤال ${r.qid_display} رجع للحل من جديد بفضل الله` : `تم حفظ السؤال ${r.qid_display} بفضل الله`, RS ? 'اختفى عن الطلاب، وهيتحل من الأول. بعد الحل هيوصلك في "تنتظرك"، ويفضل مخفي لحد الاعتماد.' : 'رجع للحل المعزول. بعد ما يتحل هيوصلك في "تنتظرك"، ويفضل مخفي عن الطلاب لحد اعتمادك.');
       location.hash = '';
     } catch (e) { btn.disabled = false; err.textContent = errText(e) + ' — مسودتك محفوظة، جرّب تاني.'; }
   };
@@ -1095,6 +1227,12 @@ function describe(ev, forList) {
     case 'commented': Object.assign(out, { icon: '💬', what: 'تعليق' }); if (d.comment) out.lines.push(['', d.comment]); break;
     case 'quick_edit': Object.assign(out, { icon: '⚡', what: 'تعديل سريع', cls: 'cobalt' }); if (d.note) out.lines.push(['السبب', d.note]); break;
     case 'rebuilt': Object.assign(out, { icon: '🛠️', what: 'إعادة تركيب النص والاختيارات', cls: 'cobalt' }); if (d.note) out.lines.push(['', d.note]); break;
+    case 'returned_to_solving': {   // 4.8 (backlog 37): version note = "Returned to solving by reviewer – reason: …\noptions from: …"
+      Object.assign(out, { icon: '🔁', what: 'رجّعه للحل من جديد', cls: 'warn' });
+      const mm = String(d.note || '').match(/reason:\s*([\s\S]*?)(?:\noptions from:\s*([\s\S]*))?$/);
+      if (mm && mm[1]) out.lines.push(['السبب', mm[1].trim()]);
+      if (mm && mm[2]) out.lines.push(['المرجع', mm[2].trim()]);
+      break; }
     case 'rebuild_requested': Object.assign(out, { icon: '🛠️', who: d.by || who, what: 'طلب إعادة تركيب السؤال' }); if (d.reason) out.lines.push(['السبب', d.reason]); break;
     case 'note_added': Object.assign(out, { icon: '📝', what: 'ملاحظة للطلاب مع الاعتماد' }); if (d.student_note) out.lines.push(['', d.student_note]); break;
     case 'claude_revised': Object.assign(out, { icon: '🤖', who: 'Claude', what: `نفّذ طلب ${d.request?.by || 'المراجع'}${d.request?.type_label ? ` (${d.request.type_label})` : ''}`, cls: 'cobalt' });
@@ -1134,9 +1272,14 @@ function evCard(ev, withQ) {
       <div class="evh"><b>${esc(e.who)}</b> <span>${esc(e.what)}</span>${e.badge && e.badge[0] ? ` <span class="tag ${e.badge[1]}">${esc(e.badge[0])}</span>` : ''}</div>
       ${lines}
       ${e.voice ? `<audio class="audio" controls preload="none" data-voice="${esc(e.voice)}"></audio>` : ''}
-      <div class="evt">${withQ ? `<a href="#q/${ev.qid}" class="evq">سؤال ${esc(ev.qid_display)}</a> · ` : ''}<time datetime="${esc(ev.at)}">${esc(ago(ev.at))}</time></div>
+      <div class="evt">${withQ ? `<a href="#q/${ev.qid}" class="evq">سؤال ${esc(ev.qid_display)}</a> · ` : ''}<time datetime="${esc(ev.at)}">${esc(ago(ev.at))}</time>${cmpBtn(ev, withQ)}</div>
     </div></li>`;
 }
+// 4.8: versions (migration 043) – "🔍 قبل وبعد" on history events that created a version, and "🗂️ نسخ السؤال" on the question page
+const cmpBtn = (ev, withQ) => {
+  const vn = Number((ev.detail || {}).version_no), qid = withQ ? Number(ev.qid) : Number(S.qid);
+  return vn > 1 && qid && ev.kind !== 'extracted' ? ` · <button class="linkbtn cmpb" type="button" data-cmp-q="${qid}" data-cmp-v="${vn}">🔍 قبل وبعد</button>` : '';
+};
 function timelineHTML(tl, open) {
   if (!tl || !tl.length) return '';
   return `<details class="tl" ${open ? 'open' : ''}><summary>🕘 تاريخ السؤال (${tl.length === 1 ? 'خطوة واحدة' : tl.length === 2 ? 'خطوتين' : tl.length <= 10 ? `${tl.length} خطوات` : `${tl.length} خطوة`})</summary>
@@ -1159,7 +1302,7 @@ function drawActivity(lastSeen) {
   const F = S.feedFilter || (S.feedFilter = { who: 'all', kind: 'all' });
   const people = [...new Set(S.feed.filter(e => !e.mine && e.actor && !['claude_revised'].includes(e.kind)).map(e => e.actor))];
   const KINDS = { all: 'كل الأحداث', approved: 'الاعتماد', requested: 'طلبات التعديل', quick_edit: 'التعديل السريع', claude: 'تنفيذ Claude', dup: 'المكرر', back: 'الرجوع والإلغاء' };
-  const kindOk = e => F.kind === 'all' || (F.kind === 'claude' ? e.kind === 'claude_revised' : F.kind === 'dup' ? e.kind.startsWith('dup_') : F.kind === 'back' ? /undone|cancelled|rejected|original/.test(e.kind) : e.kind === F.kind);
+  const kindOk = e => F.kind === 'all' || (F.kind === 'claude' ? e.kind === 'claude_revised' : F.kind === 'dup' ? e.kind.startsWith('dup_') : F.kind === 'back' ? /undone|cancelled|rejected|original|solving/.test(e.kind) : e.kind === F.kind);
   const whoOk = e => F.who === 'all' || (F.who === 'others' ? !e.mine : F.who === 'me' ? e.mine : e.actor === F.who && !e.mine);
   const list = S.feed.filter(e => kindOk(e) && whoOk(e));
   let html = '', day = '';
@@ -1340,11 +1483,14 @@ function renderQuestion() {
     <section class="panel hand"><h3>${HAND_LABEL}</h3>${split.main.trim() ? `<div class="pre" dir="auto">${esc(split.main)}</div>` : ''}
       ${q.handwritten_image_path ? `<img id="handimg" alt="صورة الملاحظة الأصلية" style="max-width:100%;margin-top:10px;border-radius:8px">` : ''}</section>` : '';
   const studentNote = v.student_note ? `<section class="panel"><h3>ملاحظة للطلاب (تظهر في التطبيق)</h3><div class="pre" dir="auto">${T(v.student_note, base?.student_note)}</div></section>` : '';
-  const hist = timelineHTML(S.timeline, q.status === 'approved');
+  const hist = timelineHTML(S.timeline, q.status === 'approved') + `<details class="tl" id="vers"><summary>🗂️ نسخ السؤال</summary><div id="vers-body" class="small muted">جاري التحميل…</div></details>`;
   // action bar by state
   let bar = '';
   const qe = access >= 3 ? `<button class="btn sec" id="qe">⚡ ${dQe ? 'أكمل التعديل السريع' : 'تعديل سريع'}</button>` : '';
   const un = b.undo && (b.undo.previous || b.undo.original) ? `<button class="btn warn" id="undo">↩️ رجوع…</button>` : '';
+  // 4.8 (backlog 37): a big change (options replaced, meaning changed) sends the question back to isolated solving
+  const rsv = access >= 3 && ['in_review', 'needs_revision', 'revised', 'approved'].includes(q.status)
+    ? `<div class="rsv-row"><a class="linkbtn" id="rsv" href="#resolve/${Number(q.qid)}">🔁 تعديل كبير؟ رجّعه للحل من جديد${Drafts.get(q.qid, 'resolve') ? ' (عندك مسودة)' : ''}</a></div>` : '';
   const row2 = (...btns) => { const x = btns.filter(Boolean); return x.length ? `<div class="row2" style="grid-template-columns:repeat(${x.length},1fr)">${x.join('')}</div>` : ''; };
   if (access >= 2) {
     if (q.status === 'in_review' || q.status === 'revised') {
@@ -1358,6 +1504,7 @@ function renderQuestion() {
       bar = `<div class="${un ? 'two' : ''}"><button class="btn primary ${un ? '' : 'block'}" id="revise">✏️ اطلب تعديلًا</button>${un}</div>
         ${row2(qe)}`;
     }
+    bar += rsv;
   }
 
   $app.innerHTML = topBar(`<button class="linkbtn" id="back" aria-label="رجوع للقائمة">→ القائمة</button><span class="grow"></span>
@@ -1398,6 +1545,7 @@ function renderQuestion() {
   on('back', () => { location.hash = ''; });
   on('prev', () => go(nav.prev)); on('next', () => go(nav.next));
   on('toggle-extra', () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); });
+  bindVersions();   // 4.8: "🗂️ نسخ السؤال" loads on first open
   on('qe', openQuickEdit);
   on('undo', openUndo);
   on('approve', () => {
@@ -2039,23 +2187,279 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 function staffCard() {
   const p = S.pipeline; if (!S.isAdmin || !p) return '';
   const st = p.by_status || {};
-  const chats = Math.ceil((p.unsolved || 0) / 35);
   const act = (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
   const openState = localStorage.getItem('staffOpen') === '1';
+  S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
+  const body = S.chapters && S.chapters.length ? S.chapters.map(chapterCard).join('') : legacyRows(p);
+  const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
     <span class="small muted" style="margin-inline-start:8px">${act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
-    <div class="row"><div class="grow">
-      <div class="stat">${p.unsolved || 0} ${p.unsolved_incomplete ? `<span class="small muted">+ ${p.unsolved_incomplete} ناقص</span>` : ''}</div>
-      <div class="small muted">سؤال ينتظر الحل${p.unsolved ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'}، 30–40 سؤالًا لكل محادثة)` : '. تظهر هنا بعد الاستخراج.'}</div>
-    </div>${p.unsolved || p.awaiting_reason ? `<button class="btn primary" data-copy="solve">انسخ رسالة محادثة الحل</button><a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">افتح Claude</a>` : ''}</div>
+    ${newBtn}${body}
+    <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div>
+    <div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>
+  </details>`;
+}
+const OPEN_CLAUDE = '<a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">افتح Claude</a>';
+// 4.8 rows, kept as the fallback while chapter_runs_status is unavailable (before migration 039, or on a failed call).
+function legacyRows(p) {
+  const chats = Math.ceil((p.unsolved || 0) / 15);   // ~15 per solve chat in practice (v4.8)
+  return `<div class="row"><div class="grow">
+      <div class="stat">${p.unsolved || 0} ${p.unsolved_incomplete ? `<span class="small muted">+ ${p.unsolved_incomplete} ينتظر إعادة التركيب</span>` : ''}</div>
+      <div class="small muted">سؤال ينتظر الحل${p.unsolved ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'}، وحوالي 15 سؤالًا لكل محادثة)` : '. تظهر هنا بعد الاستخراج.'}</div>
+    </div>${p.unsolved || p.awaiting_reason ? `<button class="btn primary" data-copy="solve">انسخ رسالة محادثة الحل</button>${OPEN_CLAUDE}` : ''}</div>
     ${p.awaiting_reason ? `<div class="row"><div class="grow small">${p.awaiting_reason} سؤال محلول ومختلف مع المصدر ينتظر كتابة سبب الاختلاف (نفس رسالة الحل).</div></div>` : ''}
     <div class="row"><div class="grow">
       <div class="stat">${p.open_requests || 0}</div>
       <div class="small muted">طلب تعديل مفتوح${p.consistency_checks ? `، و${p.consistency_checks} سؤال عُدّل سريعًا يحتاج مراجعة اتساق` : ''}</div>
-    </div>${p.open_requests || p.consistency_checks ? `<button class="btn primary" data-copy="revise">انسخ رسالة محادثة التعديلات</button>` : ''}</div>
-    <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div>
-    <div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>
-  </details>`;
+    </div>${p.open_requests || p.consistency_checks ? `<button class="btn primary" data-copy="revise">انسخ رسالة محادثة التعديلات</button>${OPEN_CLAUDE}` : ''}</div>`;
+}
+/* v4.8 (item 92 phase 2): one card per chapter file, steps in order with counts from the bank (chapter_runs_status, migration 039).
+   A copy button sits next to every step a chat can do now; two can be open at once (new questions to solve + revisions).
+   The suggested step is the first one with work, in pipeline order. Old Glaucoma batches (no single batch) get no batch line. */
+function chapterCard(c) {
+  const n = k => Number(c[k]) || 0;
+  const b = c.batch_id, key = `r${Number(c.run_id)}`;
+  const solveN = n('unsolved') + n('awaiting_reason'), revN = n('open_requests') + n('consistency_checks'), reviewN = n('in_review') + n('revised');
+  if (b) { S.copyMsgs[`x${key}`] = msgExtract(b, c.file_name || ''); S.copyMsgs[`s${key}`] = msgSolveBatch(b); }
+  const chats = Math.ceil(n('unsolved') / 15);
+  const steps = [
+    { id: 'extract', name: 'استخراج', work: !!b && n('total') === 0,
+      text: n('total') ? `${n('total')} سؤال` : 'لسه مفيش أسئلة',
+      btn: b ? `<button class="btn${n('total') ? ' sec' : ' primary'}" data-copy="x${key}">انسخ رسالة الاستخراج</button>` : '' },
+    { id: 'solve', name: 'حل', work: solveN > 0,
+      text: solveN ? `${n('unsolved')} ينتظر الحل${n('unsolved') ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'})` : ''}${n('awaiting_reason') ? `، و${n('awaiting_reason')} ينتظر سبب الاختلاف` : ''}` : 'مفيش أسئلة تنتظر الحل',
+      btn: solveN ? `<button class="btn primary" data-copy="${b ? `s${key}` : 'solve'}">انسخ رسالة الحل</button>${OPEN_CLAUDE}` : '' },
+    { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0,
+      text: n('awaiting_rebuild') ? `${n('awaiting_rebuild')} ينتظر إعادة التركيب` : 'لا شيء',
+      btn: n('awaiting_rebuild') ? '<button class="btn sec" data-gofolder="rebuild">افتح الفولدر</button>' : '' },
+    { id: 'review', name: 'مراجعة', work: reviewN > 0,
+      text: reviewN ? `${reviewN} ينتظر المراجعة` : 'لا شيء',
+      btn: reviewN ? '<button class="btn sec" data-gofolder="todo">افتح الفولدر</button>' : '' },
+    { id: 'revise', name: 'تعديلات', work: revN > 0,
+      text: revN ? `${n('open_requests')} طلب تعديل مفتوح${n('consistency_checks') ? `، و${n('consistency_checks')} عُدّل سريعًا يحتاج مراجعة اتساق` : ''}` : 'لا شيء',
+      btn: revN ? `<button class="btn primary" data-copy="revise">انسخ رسالة التعديلات</button>${OPEN_CLAUDE}` : '' },
+    { id: 'done', name: 'خلاصة', work: false, text: `معتمد ${n('approved')} من ${n('total')}`, btn: '' },
+  ];
+  const rec = (steps.find(s => s.work) || {}).id;
+  const file = b ? [
+    n('page_count') && n('pages_done') < n('page_count') ? `<span class="tag amber">صور الصفحات: ${n('pages_done')} من ${n('page_count')}</span><button class="linkbtn" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '',
+    c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
+  ].join('') : '';
+  return `<section class="chap" data-run="${Number(c.run_id)}">
+    <div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years ? ` (${esc(c.years)})` : ''}</span></div>
+    <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
+    <div class="tags">${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
+    ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}
+    <ol class="chsteps">${steps.map(s => `<li class="chstep${s.id === rec ? ' rec' : ''}${s.work ? '' : ' idle'}"><div class="grow"><b>${s.name}</b> <span class="small muted">${s.text}</span>${s.id === rec ? ' <span class="tag cobalt">الخطوة المقترحة</span>' : ''}</div>${s.btn}</li>`).join('')}</ol>
+  </section>`;
+}
+/* ---------- v4.8 (item 92 phase 2): ➕ new chapter ----------
+   pdf.js (Mozilla, Apache-2.0, legacy build 5.6.205, approved 4/10) is self-hosted under /vendor and imported only here,
+   for owners/admins, on first use: reviewers never download it. No eval, no wasm (the CSP allows neither). */
+const PDFJS_BASE = '/vendor/pdfjs-5.6.205/';
+let pdfjsP = null;
+function loadPdfJs() {
+  if (!pdfjsP) pdfjsP = import(PDFJS_BASE + 'pdf.min.js')
+    .then(m => { m.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js'; return m; })
+    .catch(e => { pdfjsP = null; throw e; });
+  return pdfjsP;
+}
+async function openPdf(bytes) {
+  const lib = await loadPdfJs();
+  return lib.getDocument({ data: bytes, isEvalSupported: false, useWasm: false }).promise;
+}
+function pdfErrText(e) {
+  const n = e && e.name;
+  if (n === 'PasswordException') return 'الملف عليه كلمة سر. افتحه واحفظه من غير كلمة سر وجرّب تاني.';
+  if (n === 'InvalidPDFException' || n === 'MissingPDFException') return 'الملف ده مش PDF سليم. جرّب تفتحه على الجهاز وتحفظه تاني.';
+  if (/Failed to fetch|import|module/i.test(String(e && e.message))) return 'مكتبة قراية الملف ماتحمّلتش. اتأكد من النت وجرّب تاني.';
+  return 'الملف ماتقراش: ' + ((e && e.message) || e);
+}
+const MB = n => (Number(n) / 1048576).toFixed(1);
+const CH_MAX = 52428800;   // = bucket chapter-files limit (migration 039)
+const DRIVE_RX = /^https:\/\/drive\.google\.com\//;   // same rule as chapter_set_link (migration 042)
+// v4.8 (owner decision 4/10): the PDF lives on the project Drive (link on the card); a copy in the app is optional.
+const STORE_HELP = `<div class="help-box hidden" id="nc-help">
+    <p><b>📁 درايف المشروع (المقترح):</b> الملف مابياخدش أي مساحة من التطبيق، والرفع أسرع على الموبايل. خلّي الملف مقفول على حسابات الفريق بس (مش "أي حد معاه اللينك")، لأن فيه إجابات المصدر. ولو التقطيع وقف وحبيت تكمّل من جهاز تاني، هتنزّل الملف من درايف الأول.</p>
+    <p><b>📥 نسخة في التطبيق:</b> لو التقطيع وقف، بيكمّل من أي جهاز لوحده من غير ما تختار الملف تاني. بس بتاخد من مساحة التطبيق المحدودة (الملف ممكن يبقى من 10 لـ 40 ميجا).</p>
+    <p>ينفع تعمل الاتنين. وفي الحالتين صور الصفحات بتترفع، ودي اللي المراجعين بيفتحوها من "📄 افتح صفحة المصدر".</p></div>`;
+function openNewChapter() {
+  let last = {}; try { last = JSON.parse(localStorage.getItem('chapterLast') || '{}'); } catch { }
+  const { sheet, close } = openSheet(`
+    <div class="sheet-head"><h2>➕ شابتر جديد</h2></div>
+    <p class="small muted">اختار ملف الشابتر، واكتب بياناته. التطبيق هيقطّعه لصور صفحات ويرفعها.</p>
+    <label class="f" for="nc-file">ملف الشابتر (PDF)</label>
+    <input type="file" id="nc-file" accept="application/pdf,.pdf">
+    <div class="small muted" id="nc-info" aria-live="polite"></div>
+    <label class="f" for="nc-ch">الشابتر</label><input class="ci" id="nc-ch" dir="auto" maxlength="120" placeholder="مثال: Cornea">
+    <label class="f" for="nc-src">المصدر</label><input class="ci" id="nc-src" dir="auto" maxlength="160" value="${esc(last.source || '')}" placeholder="مثال: Arab Board Q Bank of Ophthalmology">
+    <label class="f" for="nc-years">السنين <span class="lbl-sub">(اختياري)</span></label><input class="ci" id="nc-years" dir="auto" maxlength="60" placeholder="مثال: 2010–2021">
+    <div class="f store-h">حفظ ملف الشابتر <button class="infobtn" type="button" id="nc-help-b" aria-expanded="false" aria-controls="nc-help" title="الفرق بين الطريقتين">ℹ️ الفرق بين الطريقتين</button></div>
+    ${STORE_HELP}
+    <label class="f" for="nc-link">📁 لينك الملف على درايف المشروع <span class="lbl-sub">(اختياري، وتقدر تضيفه بعدين من الكارت)</span></label>
+    <input class="ci" id="nc-link" dir="ltr" inputmode="url" maxlength="500" placeholder="https://drive.google.com/…">
+    <label class="chk"><input type="checkbox" id="nc-copy"> 📥 احفظ نسخة من الملف في التطبيق كمان</label>
+    <div class="err" id="nc-err" role="alert"></div>
+    <div class="foot"><button class="btn primary" id="nc-go" disabled>سجّل الشابتر وابدأ</button></div>`, { canClose: () => !busy || confirm('التسجيل لسه شغال. تقفل؟') });
+  const $s = sel => sheet.querySelector(sel), err = t => { $s('#nc-err').textContent = t || ''; };
+  let file = null, pages = 0, busy = false;
+  bindHelp(sheet, '#nc-help-b', '#nc-help');
+  $s('#nc-file').onchange = async ev => {
+    file = null; pages = 0; $s('#nc-go').disabled = true; err('');
+    const f = ev.target.files && ev.target.files[0]; if (!f) return;
+    if (!/\.pdf$/i.test(f.name) || /[\/\\]/.test(f.name)) return err('لازم الملف يكون PDF.');
+    if (f.size > CH_MAX) return err(`الملف ${MB(f.size)} ميجا، والحد 50 ميجا. صغّره وجرّب تاني.`);
+    $s('#nc-info').textContent = 'جاري قراية الملف…';
+    try {
+      const doc = await openPdf(new Uint8Array(await f.arrayBuffer()));
+      pages = doc.numPages; await doc.destroy();
+    } catch (e) { console.warn('pdf open:', e); $s('#nc-info').textContent = ''; return err(pdfErrText(e)); }
+    file = f;
+    $s('#nc-info').textContent = `${pages} صفحة، ${MB(f.size)} ميجا.`;
+    const ch = $s('#nc-ch'); if (!ch.value.trim()) ch.value = f.name.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').trim();
+    $s('#nc-go').disabled = false;
+  };
+  $s('#nc-go').onclick = async () => {
+    if (!file || busy) return;
+    const go = $s('#nc-go'); err('');
+    const chapter = $s('#nc-ch').value.trim(), source = $s('#nc-src').value.trim(), years = $s('#nc-years').value.trim();
+    const link = $s('#nc-link').value.trim(), copy = $s('#nc-copy').checked;
+    if (!chapter) return err('اكتب اسم الشابتر.');
+    if (!source) return err('اكتب المصدر.');
+    if (link && !DRIVE_RX.test(link)) return err('لينك درايف لازم يبدأ بـ https://drive.google.com/');
+    busy = true; go.disabled = true;
+    let r = null;
+    try {
+      go.textContent = 'جاري تسجيل الشابتر…';
+      const res = await rpc('chapter_create', { p_chapter: chapter, p_source: source, p_years: years || null, p_file_name: file.name, p_file_size: file.size, p_page_count: pages });
+      try { localStorage.setItem('chapterLast', JSON.stringify({ source })); } catch { }
+      r = { run_id: res.run_id, batch_id: res.batch_id, chapter, page_count: pages, pages_done: 0, file_name: file.name, file_size: file.size };
+      if (link) await rpc('chapter_set_link', { p_run_id: r.run_id, p_link: link });
+      if (copy) {
+        go.textContent = `جاري رفع نسخة الملف (${MB(file.size)} ميجا)…`;
+        const { error } = await sb.storage.from('chapter-files').upload(res.file_path || `ch-${r.batch_id}/source.pdf`, file, { contentType: 'application/pdf', upsert: true });
+        if (error) throw Object.assign(new Error(error.message), { stage: 'copy' });
+        await rpc('chapter_set_progress', { p_run_id: r.run_id, p_file_uploaded: true });
+        r.file_uploaded = true;
+      }
+    } catch (e) {
+      console.warn('new chapter:', e);
+      busy = false; go.disabled = false; go.textContent = 'سجّل الشابتر وابدأ';
+      if (!r) return err(errText(e));
+      // the chapter exists: a failed link or copy must not stop the pages (both can be added later)
+      notify(e.stage === 'copy' ? 'نسخة الملف ماترفعتش' : 'لينك درايف ماتحفظش', `${errText(e)} الشابتر اتسجّل، والتقطيع هيبدأ دلوقتي.${e.stage === 'copy' ? '' : ' تقدر تضيف اللينك من الكارت.'}`, 'info');
+    }
+    busy = false; close(true);
+    openPagesSheet(r, new Uint8Array(await file.arrayBuffer()));
+  };
+}
+function bindHelp(root, btnSel, boxSel) {
+  const b = root.querySelector(btnSel), box = root.querySelector(boxSel);
+  b.onclick = () => { const open = box.classList.toggle('hidden') === false; b.setAttribute('aria-expanded', String(open)); };
+}
+function openDriveLink(c) {
+  const { sheet, close } = openSheet(`
+    <div class="sheet-head"><h2>📁 لينك درايف – ${esc(c.chapter)}</h2></div>
+    <div class="f store-h">ليه درايف؟ <button class="infobtn" type="button" id="dl-help-b" aria-expanded="false" aria-controls="nc-help">ℹ️ الفرق بين الطريقتين</button></div>
+    ${STORE_HELP}
+    <label class="f" for="dl-link">لينك الملف على درايف المشروع</label>
+    <input class="ci" id="dl-link" dir="ltr" inputmode="url" maxlength="500" value="${esc(c.drive_link || '')}" placeholder="https://drive.google.com/…">
+    <p class="small muted">سيبه فاضي واحفظ لو عايز تشيل اللينك.</p>
+    <div class="err" id="dl-err" role="alert"></div>
+    <div class="foot"><button class="btn primary" id="dl-save">احفظ اللينك</button></div>`);
+  bindHelp(sheet, '#dl-help-b', '#nc-help');
+  sheet.querySelector('#dl-save').onclick = async () => {
+    const v = sheet.querySelector('#dl-link').value.trim(), e = sheet.querySelector('#dl-err'), b = sheet.querySelector('#dl-save');
+    if (v && !DRIVE_RX.test(v)) { e.textContent = 'لينك درايف لازم يبدأ بـ https://drive.google.com/'; return; }
+    b.disabled = true;
+    try { await rpc('chapter_set_link', { p_run_id: c.run_id, p_link: v || null }); close(true); notify(v ? 'تم حفظ لينك درايف' : 'اتشال لينك درايف', ''); await loadQueue(); renderQueue(); }
+    catch (x) { console.warn('drive link:', x); b.disabled = false; e.textContent = errText(x); }
+  };
+}
+/* v4.8: page images. One page at a time (weak phones): render with pdf.js, encode WebP (JPEG where the browser cannot encode
+   WebP, e.g. Safari; same file name, real content type, the viewer shows either), upload to source-pages/ch-<batch>/pNNN.webp
+   (the name question_bundle/rebuild_queue already build), and save the count after every page, so a stop resumes from the
+   next page, on this device or another (the PDF is then read back from chapter-files). */
+const PAGE_W = 1300, PAGE_MAX = 2097152;   // width in px; bucket source-pages limit (2 MB)
+const canvasBlob = (cv, type, q) => new Promise(res => cv.toBlob(res, type, q));
+async function renderPage(doc, i) {
+  const page = await doc.getPage(i);
+  const vp1 = page.getViewport({ scale: 1 });
+  const vp = page.getViewport({ scale: Math.min(3, PAGE_W / vp1.width) });
+  const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+  const ctx = cv.getContext('2d', { alpha: false }); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  try {
+    await page.render({ canvas: cv, canvasContext: ctx, viewport: vp }).promise;
+    let blob = await canvasBlob(cv, 'image/webp', 0.8);
+    if (!blob || blob.type !== 'image/webp') blob = await canvasBlob(cv, 'image/jpeg', 0.82);
+    if (blob && blob.size > PAGE_MAX) blob = await canvasBlob(cv, 'image/jpeg', 0.6);
+    if (!blob) throw new Error('canvas encode failed');
+    return blob;
+  } finally { page.cleanup(); cv.width = cv.height = 0; }
+}
+async function chapterPdfBytes(run) {
+  const { data, error } = await sb.storage.from('chapter-files').createSignedUrl(`ch-${run.batch_id}/source.pdf`, 600);
+  if (error || !data?.signedUrl) throw new Error(error?.message || 'no signed url');
+  const res = await fetch(data.signedUrl);
+  if (!res.ok) throw new Error('download ' + res.status);
+  return new Uint8Array(await res.arrayBuffer());
+}
+// No stored copy: the same file is picked again on this device (name and size must match the registered file).
+function pickSameFile(sheet, run) {
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.innerHTML = `<label class="f" for="pg-file">اختار نفس الملف من جهازك: <b dir="ltr">${esc(run.file_name || '')}</b> (${MB(run.file_size)} ميجا)</label>
+      <input type="file" id="pg-file" accept="application/pdf,.pdf"><p class="small muted">مش معاك على الجهاز ده؟ نزّله من لينك درايف في كارت الشابتر.</p>`;
+    sheet.querySelector('#pg-txt').before(box); sheet.querySelector('#pg-txt').textContent = '';
+    box.querySelector('#pg-file').onchange = async ev => {
+      const f = ev.target.files && ev.target.files[0]; if (!f) return;
+      if (f.name !== run.file_name || f.size !== Number(run.file_size)) { sheet.querySelector('#pg-err').textContent = 'ده مش نفس الملف المتسجّل للشابتر ده (الاسم أو الحجم مختلف).'; return; }
+      sheet.querySelector('#pg-err').textContent = ''; box.remove(); sheet.querySelector('#pg-txt').textContent = 'جاري التحضير…';
+      resolve(new Uint8Array(await f.arrayBuffer()));
+    };
+  });
+}
+function openPagesSheet(run, bytes) {
+  const total = Number(run.page_count) || 0; let from = (Number(run.pages_done) || 0) + 1, stop = false, busy = true, lock = null;
+  const { sheet, close } = openSheet(`
+    <div class="sheet-head"><h2>صور صفحات ${esc(run.chapter || '')}</h2></div>
+    <p class="small muted">التطبيق بيقطّع الملف لصور ويرفعها. سيب الشاشة مفتوحة لحد ما يخلص. ولو وقفت، تقدر تكمّل بعدين من زرار "كمّل صور الصفحات" في كارته، من الجهاز ده أو من غيره.</p>
+    <progress id="pg-bar" max="${total}" value="${from - 1}" style="width:100%"></progress>
+    <div id="pg-txt" aria-live="polite">جاري التحضير…</div>
+    <div class="err" id="pg-err" role="alert"></div>
+    <div class="foot"><button class="btn" id="pg-stop">إيقاف</button></div>`, { canClose: () => !busy || confirm('التقطيع لسه شغال. توقفه؟ (اللي اترفع بيتحفظ)'), onClose: () => { stop = true; } });
+  const $s = q => sheet.querySelector(q);
+  const done = async (title, body, kind) => { busy = false; try { lock && lock.release(); } catch { } close(true); notify(title, body, kind); await loadQueue().catch(() => { }); renderQueue(); };
+  $s('#pg-stop').onclick = () => { stop = true; $s('#pg-stop').disabled = true; $s('#pg-txt').textContent = 'هيقف بعد الصفحة اللي شغال عليها…'; };
+  (async () => {
+    try { lock = await navigator.wakeLock?.request('screen'); } catch { }   // optional: keeps the phone screen on while it works
+    let doc = null, t0 = 0, n = 0;
+    try {
+      if (!bytes && run.file_uploaded) { $s('#pg-txt').textContent = 'جاري تحميل نسخة الملف من التطبيق…'; bytes = await chapterPdfBytes(run); }
+      if (!bytes) bytes = await pickSameFile(sheet, run);
+      doc = await openPdf(bytes);
+      if (doc.numPages !== total) throw new Error(`الملف فيه ${doc.numPages} صفحة، والمتسجّل ${total}`);
+      t0 = performance.now();
+      for (let i = from; i <= total && !stop; i++) {
+        const blob = await renderPage(doc, i);
+        const path = `ch-${run.batch_id}/p${String(i).padStart(3, '0')}.webp`;
+        const { error } = await sb.storage.from('source-pages').upload(path, blob, { contentType: blob.type, upsert: true });
+        if (error) throw Object.assign(new Error(error.message), { page: i });
+        await rpc('chapter_set_progress', { p_run_id: run.run_id, p_pages_done: i });
+        n++; from = i + 1;
+        const per = (performance.now() - t0) / n / 1000;
+        $s('#pg-bar').value = i; $s('#pg-txt').textContent = `صفحة ${i} من ${total} (حوالي ${per.toFixed(1)} ثانية للصفحة، والباقي حوالي ${Math.ceil(per * (total - i) / 60)} دقيقة)`;
+      }
+      if (from > total) await done(`تم رفع صور صفحات ${run.chapter || ''} بفضل الله`, `${total} صفحة. الخطوة الجاية: انسخ رسالة الاستخراج من كارته، وارفق نفس الملف.`);
+      else await done('اتوقف التقطيع', `اترفع ${from - 1} من ${total}. كمّل من زرار "كمّل صور الصفحات" في كارته.`, 'info');
+    } catch (e) {
+      console.warn('chapter pages:', e);
+      busy = false; try { lock && lock.release(); } catch { }
+      const where = e.page ? `صفحة ${e.page}: ` : '';
+      $s('#pg-err').textContent = `${where}${/Exception$/.test(e.name || '') ? pdfErrText(e) : errText(e)}. اللي اترفع (${from - 1} من ${total}) محفوظ. جرّب تكمّل بعدين، ولو الموبايل ماقدرش كمّل من الكمبيوتر.`;
+      $s('#pg-stop').textContent = 'قفل'; $s('#pg-stop').disabled = false; $s('#pg-stop').onclick = () => { close(true); loadQueue().then(renderQueue).catch(() => { }); };
+    } finally { if (doc) doc.destroy().catch(() => { }); }
+  })();
 }
 /* ---------- paid API solver (staff panel) ---------- */
 const PHASE_AR = {
