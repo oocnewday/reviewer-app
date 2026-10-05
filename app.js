@@ -12,8 +12,8 @@ const msgExtract = (batch, file) => `${chatMsg('محادثة استخراج')}\n
 const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '4.8';
-const APP_BUILD = '4/10/2026';
+const APP_VERSION = '5.0';
+const APP_BUILD = '5/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -619,6 +619,16 @@ function renderQueue() {
   };
   $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText((S.copyMsgs || {})[b.dataset.copy] || (b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE)));
   const ncb = document.getElementById('nc-open'); if (ncb) ncb.onclick = () => openNewChapter();
+  $app.querySelectorAll('details.chap').forEach(d => d.addEventListener('toggle', () => {
+    const id = Number(d.dataset.run), set = new Set(chapOpen());
+    if (d.open) set.add(id); else set.delete(id);
+    try { localStorage.setItem('chapOpen', JSON.stringify([...set])); } catch { }
+  }));
+  const sd = document.getElementById('solver-d'); if (sd) sd.addEventListener('toggle', () => { try { localStorage.setItem('solverOpen', sd.open ? '1' : '0'); } catch { } });
+  $app.querySelectorAll('[data-viewpages]').forEach(b => b.onclick = () => {
+    const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.viewpages)); if (!c) return;
+    openPageViewer({ prefix: c.pages_prefix, ext: c.pages_ext || 'webp', bucket: c.pages_bucket || 'source-pages', page_count: Number(c.pages_done) || Number(c.page_count), page_offset: Number(c.page_offset) || 0 }, 1);
+  });
   $app.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.link)); if (c) openDriveLink(c); });
   $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
   $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
@@ -812,14 +822,23 @@ async function loadVersions(qid, fresh) {
   if (!Array.isArray(list)) throw new Error('Not allowed');
   return (VerCache[qid] = list);
 }
-const verLabel = v => {
+const SOLVER_LABELS = ['claude_solver', 'claude_api_solver'];
+// 5.0: a Claude version after an earlier Claude solution (no return to solving in between) is a rewrite, not a new solve;
+// an executed revision names the reviewer who asked for it (question_versions.requested_by, migration 044)
+const verLabel = (v, list) => {
   const l = v.label || '';
+  if (SOLVER_LABELS.includes(l) && list) {
+    const before = list.filter(x => x.id < v.id);
+    const lastReset = Math.max(0, ...before.filter(x => x.label === 'reviewer_completion').map(x => x.id));
+    if (before.some(x => SOLVER_LABELS.includes(x.label) && x.id > lastReset)) return '🤖 تحديث Claude للشرح';
+  }
+  if (v.requested_by && (l === 'claude_revision' || l === 'claude')) return `🤖 تنفيذ Claude لطلب تعديل – بطلب ${v.requested_by}`;
   if (l === 'reviewer_completion') return /^Returned to solving/.test(v.note || '') ? '🔁 رجّعه للحل' : '🛠️ إعادة تركيب';
   return { claude_extraction: '📥 الاستخراج', claude_solver: '🤖 حل Claude', claude_api_solver: '🤖 المحلّل الآلي', claude_revision: '🤖 تنفيذ Claude لطلب تعديل', claude: '🤖 تعديل Claude', reviewer_quick_edit: '⚡ تعديل سريع', reviewer: '📝 تعديل المراجع' }[l] || l;
 };
 function versionsHTML(list) {
   if (!list.length) return '<p class="small muted">مفيش نسخ.</p>';
-  return `<ol class="vers">${list.slice().reverse().map((v, i, arr) => `<li><div><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}</div>
+  return `<ol class="vers">${list.slice().reverse().map((v, i, arr) => `<li><div><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v, list))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}</div>
     <div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}<time datetime="${esc(v.at)}">${esc(ago(v.at))}</time>${i < arr.length - 1 ? ` · <button class="linkbtn cmpb" type="button" data-cmp-q="${Number(S.qid)}" data-cmp-v="${Number(v.version_no)}">🔍 قارن باللي قبلها</button>` : ''}</div></li>`).join('')}</ol>`;
 }
 function bindVersions() {
@@ -864,7 +883,7 @@ async function openCompare(qid, vn) {
     if (idx < 1) { body.textContent = 'مفيش نسخة قبل دي.'; return; }
     const v = list[idx], prev = list[idx - 1];
     body.className = '';
-    body.innerHTML = `<div class="cmp-head"><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}<div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}${esc(ago(v.at))}، مقارنة بالنسخة ${esc(prev.version_no)} (${esc(verLabel(prev))})</div>${v.note ? `<div class="small" dir="auto">${nl(v.note)}</div>` : ''}</div>
+    body.innerHTML = `<div class="cmp-head"><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v, list))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}<div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}${esc(ago(v.at))}، مقارنة بالنسخة ${esc(prev.version_no)} (${esc(verLabel(prev, list))})</div>${v.note ? `<div class="small" dir="auto">${nl(v.note)}</div>` : ''}</div>
       <p class="hint">المشطوب اتشال، والمتعلّم عليه اتضاف.</p>${compareHTML(prev, v)}`;
   } catch (e) { console.warn('compare:', e); body.textContent = errText(e); }
 }
@@ -1391,6 +1410,13 @@ function go(r) {
   location.hash = `#q/${r.qid}`;
 }
 
+// 4.8.1: the fixed action bar can be 1–3 rows tall; the page keeps that much room under its last line (was a fixed 140px)
+function fitActions() {
+  const a = $app.querySelector('.actions'), m = document.getElementById('qmain');
+  if (!a || !m) return;
+  m.style.paddingBottom = Math.max(140, Math.ceil(a.getBoundingClientRect().height) + 24) + 'px';
+}
+window.addEventListener('resize', () => fitActions());
 function renderQuestion() {
   stopSolverTimer();
   const b = S.bundle, q = b.question, v = b.current_version || {}, tax = b.taxonomy || {};
@@ -1504,7 +1530,6 @@ function renderQuestion() {
       bar = `<div class="${un ? 'two' : ''}"><button class="btn primary ${un ? '' : 'block'}" id="revise">✏️ اطلب تعديلًا</button>${un}</div>
         ${row2(qe)}`;
     }
-    bar += rsv;
   }
 
   $app.innerHTML = topBar(`<button class="linkbtn" id="back" aria-label="رجوع للقائمة">→ القائمة</button><span class="grow"></span>
@@ -1537,6 +1562,7 @@ function renderQuestion() {
     ${hand}
     ${hist}
     ${access < 2 ? `<section class="panel"><p style="margin:0">صلاحيتك على هذا السؤال قراءة فقط.</p></section>` : ''}
+    ${rsv}
     <p class="small muted" style="text-align:center;margin-top:18px">اسحب يمينًا أو شمالًا للتنقل بين الأسئلة</p>
   </main>
   ${bar ? `<div class="actions"><div class="actions-in">${bar}</div></div>` : ''}`;
@@ -1545,6 +1571,7 @@ function renderQuestion() {
   on('back', () => { location.hash = ''; });
   on('prev', () => go(nav.prev)); on('next', () => go(nav.next));
   on('toggle-extra', () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); });
+  fitActions();
   bindVersions();   // 4.8: "🗂️ نسخ السؤال" loads on first open
   on('qe', openQuickEdit);
   on('undo', openUndo);
@@ -2190,12 +2217,13 @@ function staffCard() {
   const act = (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
   const openState = localStorage.getItem('staffOpen') === '1';
   S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
-  const body = S.chapters && S.chapters.length ? S.chapters.map(chapterCard).join('') : legacyRows(p);
+  const body = S.chapters && S.chapters.length ? chapterList(S.chapters) : legacyRows(p);
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
     <span class="small muted" style="margin-inline-start:8px">${act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
     ${newBtn}${body}
-    <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div>
+    <details class="solver-d" id="solver-d" ${localStorage.getItem('solverOpen') === '1' ? 'open' : ''}><summary>🤖 المحلّل الآلي (مدفوع): <span id="solver-sum" class="small muted">جاري التحميل…</span></summary>
+      <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div></details>
     <div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>
   </details>`;
 }
@@ -2216,6 +2244,15 @@ function legacyRows(p) {
 /* v4.8 (item 92 phase 2): one card per chapter file, steps in order with counts from the bank (chapter_runs_status, migration 039).
    A copy button sits next to every step a chat can do now; two can be open at once (new questions to solve + revisions).
    The suggested step is the first one with work, in pipeline order. Old Glaucoma batches (no single batch) get no batch line. */
+// 5.0: chapters with work first (newest first), finished chapters (all approved, nothing to do) grouped at the end
+const chapOpen = () => { try { return JSON.parse(localStorage.getItem('chapOpen') || '[]'); } catch { return []; } };
+function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0; }
+function chapterList(list) {
+  const sorted = list.slice().sort((a, b) => (chapWork(b) - chapWork(a)) || (Number(b.run_id) - Number(a.run_id)));
+  const done = sorted.filter(c => !chapWork(c) && Number(c.total) > 0 && Number(c.approved) === Number(c.total));
+  const active = sorted.filter(c => !done.includes(c));
+  return active.map(chapterCard).join('') + (done.length ? `<details class="chap-done"><summary>✅ شباتر خلصت (${done.length})</summary>${done.map(chapterCard).join('')}</details>` : '');
+}
 function chapterCard(c) {
   const n = k => Number(c[k]) || 0;
   const b = c.batch_id, key = `r${Number(c.run_id)}`;
@@ -2245,13 +2282,18 @@ function chapterCard(c) {
     n('page_count') && n('pages_done') < n('page_count') ? `<span class="tag amber">صور الصفحات: ${n('pages_done')} من ${n('page_count')}</span><button class="linkbtn" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '',
     c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
   ].join('') : '';
-  return `<section class="chap" data-run="${Number(c.run_id)}">
-    <div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years ? ` (${esc(c.years)})` : ''}</span></div>
+  const recStep = steps.find(s => s.id === rec);
+  const chips = [n('unsolved') + n('awaiting_reason') ? `${n('unsolved') + n('awaiting_reason')} للحل` : '', n('awaiting_rebuild') ? `${n('awaiting_rebuild')} تركيب` : '',
+    reviewN ? `${reviewN} مراجعة` : '', revN ? `${revN} تعديلات` : '', `معتمد ${n('approved')} من ${n('total')}`].filter(Boolean).join(' · ');
+  const isOpen = chapOpen().includes(Number(c.run_id));
+  return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
+    <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>
+      <div class="chap-sum small">${recStep ? `<span class="tag cobalt">المقترح: ${recStep.name}</span> ` : ''}<span class="muted">${chips}</span></div></summary>
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
-    <div class="tags">${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
+    <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
     ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}
     <ol class="chsteps">${steps.map(s => `<li class="chstep${s.id === rec ? ' rec' : ''}${s.work ? '' : ' idle'}"><div class="grow"><b>${s.name}</b> <span class="small muted">${s.text}</span>${s.id === rec ? ' <span class="tag cobalt">الخطوة المقترحة</span>' : ''}</div>${s.btn}</li>`).join('')}</ol>
-  </section>`;
+  </details>`;
 }
 /* ---------- v4.8 (item 92 phase 2): ➕ new chapter ----------
    pdf.js (Mozilla, Apache-2.0, legacy build 5.6.205, approved 4/10) is self-hosted under /vendor and imported only here,
@@ -2294,6 +2336,7 @@ function openNewChapter() {
     <label class="f" for="nc-ch">الشابتر</label><input class="ci" id="nc-ch" dir="auto" maxlength="120" placeholder="مثال: Cornea">
     <label class="f" for="nc-src">المصدر</label><input class="ci" id="nc-src" dir="auto" maxlength="160" value="${esc(last.source || '')}" placeholder="مثال: Arab Board Q Bank of Ophthalmology">
     <label class="f" for="nc-years">السنين <span class="lbl-sub">(اختياري)</span></label><input class="ci" id="nc-years" dir="auto" maxlength="60" placeholder="مثال: 2010–2021">
+    <p class="hint">لو سبتها فاضية، محادثة الاستخراج بتطلّع سنة كل سؤال من الملف، والكارت بيكتب أول وآخر سنة لوحده.</p>
     <div class="f store-h">حفظ ملف الشابتر <button class="infobtn" type="button" id="nc-help-b" aria-expanded="false" aria-controls="nc-help" title="الفرق بين الطريقتين">ℹ️ الفرق بين الطريقتين</button></div>
     ${STORE_HELP}
     <label class="f" for="nc-link">📁 لينك الملف على درايف المشروع <span class="lbl-sub">(اختياري، وتقدر تضيفه بعدين من الكارت)</span></label>
@@ -2507,11 +2550,15 @@ async function loadSolver(pollFirst = true) {
     let st = await solverCall('status');
     if (st.active && pollFirst) { await solverCall('poll', { run_id: st.active.id }).catch(() => null); st = await solverCall('status'); }
     renderSolver(st);
-  } catch (e) { box.innerHTML = `<div class="grow small"><b>المحلّل الآلي:</b> تعذّر الوصول إليه. ${esc(solverErr(e))}</div><button class="btn" id="sv-retry">حاول مرة أخرى</button>`; document.getElementById('sv-retry').onclick = () => loadSolver(); }
+  } catch (e) { const sm = document.getElementById('solver-sum'); if (sm) sm.textContent = 'تعذّر الوصول'; box.innerHTML = `<div class="grow small"><b>المحلّل الآلي:</b> تعذّر الوصول إليه. ${esc(solverErr(e))}</div><button class="btn" id="sv-retry">حاول مرة أخرى</button>`; document.getElementById('sv-retry').onclick = () => loadSolver(); }
 }
 function renderSolver(st) {
   const box = document.getElementById('solver-box'); if (!box) return;
   stopSolverTimer();
+  // 5.0: the panel shows the solver as one line; it opens by itself while a run is going
+  const sum = document.getElementById('solver-sum'), sd = document.getElementById('solver-d');
+  if (sum) sum.textContent = !st.configured ? 'غير مفعّل' : st.active ? 'شغال دلوقتي' : 'جاهز';
+  if (sd && st.active) sd.open = true;
   const head = `<b>المحلّل الآلي (مدفوع)</b> <span class="small muted" dir="ltr">${esc(st.model || '')} · ${esc(st.effort || '')}</span>`;
   const last = (st.runs || []).find(r => !['solve', 'second', 'reason'].includes(r.status));
   let html = '';

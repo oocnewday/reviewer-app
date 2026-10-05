@@ -511,7 +511,7 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .sheet .help-box p{margin:6px 0}
 .sheet label.chk{display:flex;align-items:center;gap:8px;margin:12px 0 4px;font-weight:600;min-height:44px}
 .sheet label.chk input{width:22px;height:22px}
-.rsv-row{margin-top:10px;text-align:center}
+.rsv-row{margin-top:22px;text-align:center}
 .rsv-row .linkbtn{font-size:.92rem}
 /* 4.8 question versions, before/after (migration 043) */
 .vers{list-style:none;margin:8px 0 0;padding:0}
@@ -523,3 +523,14 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .cmpf.chg{border-inline-start:3px solid var(--amber);padding:6px 10px;background:var(--surface);border-radius:6px}
 .cmpf .cmpt{font-weight:600;margin-bottom:4px}
 .cmpf .pre{white-space:pre-wrap}
+/* 5.0 admin panel: collapsible chapters, finished group, one-line solver */
+.staff details.chap{border-top:1px solid var(--line-2);padding:10px 0}
+.staff details.chap>summary{cursor:pointer;list-style:none;display:block;padding-inline-start:18px;position:relative}
+.staff details.chap>summary::-webkit-details-marker,.staff .chap-done>summary::-webkit-details-marker,.staff .solver-d>summary::-webkit-details-marker{display:none}
+.staff details.chap>summary::before{content:'◂';position:absolute;inset-inline-start:0;top:2px;color:var(--cobalt);transition:transform .15s}
+.staff details.chap[open]>summary::before{transform:rotate(-90deg)}
+.staff .chap-sum{margin-top:4px;line-height:1.8}
+.staff .chap-done{border-top:1px solid var(--line-2);padding:10px 0}
+.staff .chap-done>summary,.staff .solver-d>summary{cursor:pointer;list-style:none;font-weight:600;color:var(--cobalt);min-height:36px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.staff .solver-d{border-top:1px solid var(--line-2);padding:10px 0}
+.staff .solver-d .row{border-top:0}
