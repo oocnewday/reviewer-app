@@ -537,3 +537,15 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 /* 5.1: versions set aside by a revert */
 .vers li.aside{opacity:.8}
 .rev-line{background:var(--surface);border-inline-start:3px solid var(--amber);padding:6px 10px;border-radius:6px;margin:6px 0}
+/* 5.2 topics */
+.qtopic{display:block}
+.topic-list{display:flex;flex-direction:column;gap:4px;margin:8px 0;max-height:50vh;overflow:auto}
+.topic-opt{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 8px;border:1px solid var(--line-2);border-radius:8px}
+.topic-opt input{width:20px;height:20px}
+.tgroup{background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;margin:8px 0}
+.tgroup>summary{cursor:pointer;min-height:40px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tqs{list-style:none;margin:6px 0 0;padding:0}
+.tq{padding:8px 0;border-top:1px solid var(--line-2)}
+.tg-act{gap:8px;flex-wrap:wrap}
+.btn.small{min-height:36px;padding:6px 10px;font-size:.88rem}
+.linkbtn.danger{color:var(--red,#b42318)}

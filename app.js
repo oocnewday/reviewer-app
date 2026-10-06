@@ -10,10 +10,12 @@ const MSG_REVISE = chatMsg('محادثة تنفيذ التعديلات');
 // Chapter card (v4.8, item 92 phase 2): the batch line (and the attached file for extraction) ride under the same short text.
 const msgExtract = (batch, file) => `${chatMsg('محادثة استخراج')}\nالدفعة: ${batch}\nالملف المرفق: ${file}`;
 const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
+// 5.2 (backlog 102): the topics chat works on one chapter file: the batch for new chapters, the source file for old ones
+const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.1';
-const APP_BUILD = '6/10/2026';
+const APP_VERSION = '5.2';
+const APP_BUILD = '7/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -75,6 +77,11 @@ const fail = e => notify('لم يتم الإجراء', errText(e), 'err', 6000);
 function errText(e) {
   const m = (e && (e.message || e.error_description || e.msg)) || String(e);
   if (/Not allowed/i.test(m)) return 'ليست لديك صلاحية على هذا السؤال.';
+  // 5.2: topics (migration 046)
+  if (/TOPIC_CHAPTER/.test(m)) return 'الموضوع ده مش من مواضيع شابتر السؤال.';
+  if (/TOPIC_EXISTS/.test(m)) return 'فيه موضوع بنفس الاسم في الشابتر ده.';
+  if (/TOPIC_MERGE/.test(m)) return 'الدمج بيكون بين موضوعين مختلفين في نفس الشابتر.';
+  if (/CHAPTER_HAS_QUESTIONS/.test(m)) return 'الشابتر ده فيه أسئلة، فمش هينفع يتمسح.';
   // 4.8: return to solving (backlog 37, migration 043)
   if (/NOT_IN_REVIEW/.test(m)) return 'السؤال ده رجع للحل أو لسه ماتحلّش، فمش هينفع تراجعه دلوقتي. ارجع للقائمة وحدّثها.';
   if (/QUESTION_CHANGED/.test(m)) return 'السؤال اتغيّر من ساعة ما فتحته (حد عدّله أو اعتمده). ارجع للسؤال وافتحه تاني.';
@@ -499,11 +506,12 @@ async function route() {
   if (!S.view) S.view = loadView();
   const m = location.hash.match(/^#q\/(\d+)/);
   try {
-    const rm = location.hash.match(/^#report\/(\d+)/), bm = location.hash.match(/^#rebuild\/(\d+)/), sm = location.hash.match(/^#resolve\/(\d+)/);
+    const rm = location.hash.match(/^#report\/(\d+)/), bm = location.hash.match(/^#rebuild\/(\d+)/), sm = location.hash.match(/^#resolve\/(\d+)/), tm = location.hash.match(/^#topics\/(\d+)/);
     if (location.hash === '#activity') { if (!S.rows.length) await loadQueue(); await renderActivity(false); }
     else if (rm) await renderBatchReport(Number(rm[1]));
     else if (bm) await renderRebuild(Number(bm[1]));
     else if (sm) await renderRebuild(Number(sm[1]), 'resolve');
+    else if (tm) await renderTopics(Number(tm[1]));
     else if (m) await openQuestion(Number(m[1]));
     else {
       closeSheets();
@@ -635,6 +643,7 @@ function renderQueue() {
     const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.viewpages)); if (!c) return;
     openPageViewer({ prefix: c.pages_prefix, ext: c.pages_ext || 'webp', bucket: c.pages_bucket || 'source-pages', page_count: Number(c.pages_done) || Number(c.page_count), page_offset: Number(c.page_offset) || 0 }, 1);
   });
+  $app.querySelectorAll('[data-delrun]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.delrun)); if (c) deleteChapter(c); });
   $app.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.link)); if (c) openDriveLink(c); });
   $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
   $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
@@ -818,6 +827,125 @@ async function reloadQuestion() {
   if (S.qid !== qid || !b || location.hash !== `#q/${qid}`) return;
   S.bundle = b; S.timeline = tl || []; delete VerCache[qid];
   renderQuestion(); scrollTo(0, y);
+}
+
+/* ---------- 5.2: topics (backlog 102, migration 046) ----------
+   A topic is a taxonomy item under the question's chapter. The topics chat suggests; a reviewer (access >= 2) may change it;
+   approving the question confirms it (server trigger), and on an approved question the reviewer's change is confirmed at once.
+   Only confirmed topics reach students. A missing function (before 046) simply hides the line. */
+async function loadTopic() {
+  const box = document.getElementById('qtopic'), qid = S.qid; if (!box || !qid) return;
+  let t = null; try { t = await rpc('question_topic', { p_qid: qid }); } catch (e) { console.warn('question_topic:', e && e.message); return; }
+  if (!t || S.qid !== qid || !document.getElementById('qtopic')) return;
+  S.topic = t;
+  const cur = t.confirmed, sug = t.suggested;
+  const label = sug ? `${esc(sug.name)} <span class="tag amber">مقترح</span>` : cur ? `${esc(cur.name)} <span class="tag ok">متأكد</span>` : '<span class="muted">لسه مالوش موضوع</span>';
+  const was = sug && cur ? ` <span class="small muted">(المتأكد حاليًا: ${esc(cur.name)})</span>` : '';
+  box.innerHTML = `الموضوع: <b>${label}</b>${was}${t.can_edit && (t.topics || []).length ? ' <button class="linkbtn" type="button" id="qtopic-edit">تغيير</button>' : ''}`;
+  box.hidden = false;
+  const b = document.getElementById('qtopic-edit'); if (b) b.onclick = () => openTopicPicker(qid, t);
+}
+function openTopicPicker(qid, t) {
+  const curId = (t.suggested || t.confirmed || {}).id;
+  const approved = S.bundle?.question?.status === 'approved';
+  const { sheet, close } = openSheet(`
+    <div class="sheet-head"><h2>🏷️ موضوع السؤال</h2></div>
+    <p class="small muted">مواضيع شابتر ${esc(t.chapter?.name || '')}. ${approved ? 'السؤال معتمد، فاختيارك هيتأكد على طول.' : 'اختيارك هيفضل مقترح، ويتأكد لما السؤال يتعتمد.'}</p>
+    <div class="topic-list" role="radiogroup">${(t.topics || []).map(x => `<label class="topic-opt"><input type="radio" name="tp" value="${Number(x.id)}" ${x.id === curId ? 'checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
+    <p class="hint">موضوع مش موجود؟ الإدارة تقدر تضيفه من "مواضيع الشابتر" في لوحة الإدارة.</p>
+    <div class="err" id="tp-err" role="alert"></div>
+    <div class="foot"><button class="btn primary" id="tp-save">حفظ</button></div>`);
+  sheet.querySelector('#tp-save').onclick = async () => {
+    const v = sheet.querySelector('input[name="tp"]:checked'), e = sheet.querySelector('#tp-err'), b = sheet.querySelector('#tp-save');
+    if (!v) { e.textContent = 'اختار موضوع.'; return; }
+    b.disabled = true;
+    try {
+      const r = await rpc('set_question_topic', { p_qid: qid, p_topic_id: Number(v.value) });
+      close(true); notify(r === 'confirmed' ? 'تم تأكيد الموضوع' : r === 'unchanged' ? 'الموضوع زي ما هو' : 'تم حفظ الموضوع المقترح', r === 'suggested' ? 'هيتأكد لما السؤال يتعتمد.' : '');
+      loadTopic();
+    } catch (x) { console.warn('set_question_topic:', x); b.disabled = false; e.textContent = errText(x); }
+  };
+}
+
+// 5.2: delete a chapter card that has no questions (migration 047), then its page images and optional PDF copy
+async function deleteChapter(c) {
+  if (!confirm(`مسح شابتر "${c.chapter}" (الدفعة ${c.batch_id})؟\nهيتمسح الكارت وصور الصفحات ونسخة الملف لو موجودة. الشابتر مفيهوش أسئلة.`)) return;
+  if (!confirm('متأكد؟ المسح نهائي.')) return;
+  try {
+    const r = await rpc('chapter_delete', { p_run_id: c.run_id });
+    let left = 0;
+    try {
+      const { data: files } = await sb.storage.from(r.pages_bucket).list(r.pages_prefix, { limit: 1000 });
+      const paths = (files || []).map(f => `${r.pages_prefix}/${f.name}`);
+      if (paths.length) { const { error } = await sb.storage.from(r.pages_bucket).remove(paths); if (error) left += paths.length; }
+      if (r.had_copy) { const { error } = await sb.storage.from(r.file_bucket).remove([r.file_path]); if (error) left++; }
+    } catch (e) { console.warn('chapter files:', e); left++; }
+    notify(`اتمسح شابتر ${c.chapter}`, left ? 'بس فيه ملفات ماتمسحتش من المخزن؛ ممكن تتمسح من لوحة Supabase.' : '', left ? 'info' : undefined);
+    await loadQueue(); renderQueue();
+  } catch (e) { console.warn('chapter_delete:', e); notify('ماتمسحش', errText(e), 'info'); }
+}
+// 5.2: the chapter's topics screen (admins): groups, move, confirm a group, add / rename / merge topics
+async function renderTopics(chapterId) {
+  stopSolverTimer(); closeSheets();
+  $app.innerHTML = '<div class="loading">جاري تحميل المواضيع…</div>';
+  const d = await rpc('chapter_topics', { p_chapter_id: chapterId });
+  const head = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">🏷️ مواضيع ${esc(d?.chapter || '')}</span>`);
+  if (!d) { $app.innerHTML = head + '<main class="wrap"><div class="empty"><p>الشاشة دي للإدارة بس.</p></div></main>'; document.getElementById('back').onclick = () => { location.hash = ''; }; return; }
+  const groups = d.groups || [], allTopics = groups.map(g => ({ id: g.topic_id, name: g.name }));
+  const qrow = (q, tid) => `<li class="tq"><a href="#q/${Number(q.qid)}">${esc(q.qid_display)}</a> <span class="small muted">${esc(STATUS_AR[q.status] || q.status)}</span>
+      ${q.state ? `<span class="tag ${q.state === 'confirmed' ? 'ok' : 'amber'}">${q.state === 'confirmed' ? 'متأكد' : 'مقترح'}</span>` : ''}
+      <div class="small" dir="auto">${esc(q.stem || '')}…</div>
+      <button class="linkbtn" type="button" data-move="${Number(q.qid)}" data-from="${tid || ''}">${tid ? 'نقل لموضوع تاني' : 'حدد موضوع'}</button></li>`;
+  $app.innerHTML = head + `<main class="wrap">
+    <p class="small muted">الأسئلة متجمعة تحت مواضيعها. "مقترح" = محادثة التصنيف أو مراجع اختاره ولسه ماتأكدش؛ والاعتماد بيأكده لوحده. والمتأكد بس هو اللي بيوصل للطلاب.</p>
+    <div class="row"><button class="btn sec" id="tp-add">➕ موضوع جديد</button></div>
+    ${groups.map(g => { const sug = g.questions.filter(q => q.state === 'suggested');
+      return `<details class="tgroup" ${sug.length ? 'open' : ''}><summary><b>${esc(g.name)}</b> <span class="small muted">${g.questions.length} سؤال${sug.length ? ` · ${sug.length} مقترح` : ''}</span></summary>
+        <div class="row tg-act">${sug.length ? `<button class="btn primary" data-confirm="${Number(g.topic_id)}">✓ أكّد المقترح (${sug.length})</button>` : ''}
+          <button class="linkbtn" data-rename="${Number(g.topic_id)}">✏️ الاسم</button><button class="linkbtn" data-merge="${Number(g.topic_id)}">🔀 دمج في موضوع تاني</button></div>
+        <ol class="tqs">${g.questions.map(q => qrow(q, g.topic_id)).join('') || '<li class="small muted">مفيش أسئلة.</li>'}</ol></details>`; }).join('')}
+    ${(d.unclassified || []).length ? `<details class="tgroup"><summary><b>مالهاش موضوع</b> <span class="small muted">${d.unclassified.length} سؤال</span></summary><ol class="tqs">${d.unclassified.map(q => qrow(q, null)).join('')}</ol></details>` : ''}
+  </main>`;
+  const reload = () => renderTopics(chapterId);
+  document.getElementById('back').onclick = () => { location.hash = ''; };
+  document.getElementById('tp-add').onclick = async () => {
+    const name = (prompt('اسم الموضوع الجديد (بالإنجليزي، زي ما في المراجع):') || '').trim(); if (!name) return;
+    try { await rpc('topic_add', { p_chapter_id: chapterId, p_name: name }); reload(); } catch (e) { notify('ماتضافش', errText(e), 'info'); }
+  };
+  $app.querySelectorAll('[data-confirm]').forEach(b => b.onclick = async () => {
+    const g = groups.find(x => x.topic_id === Number(b.dataset.confirm)); const qids = g.questions.filter(q => q.state === 'suggested').map(q => q.qid);
+    if (!confirm(`تأكيد موضوع "${g.name}" لـ ${qids.length} سؤال؟`)) return;
+    b.disabled = true;
+    try { const n = await rpc('confirm_topics', { p_qids: qids }); notify(`اتأكد ${n} سؤال`, ''); reload(); } catch (e) { b.disabled = false; notify('ماتأكدش', errText(e), 'info'); }
+  });
+  $app.querySelectorAll('[data-rename]').forEach(b => b.onclick = async () => {
+    const g = groups.find(x => x.topic_id === Number(b.dataset.rename)); const name = (prompt('الاسم الجديد:', g.name) || '').trim(); if (!name || name === g.name) return;
+    try { await rpc('topic_rename', { p_topic_id: g.topic_id, p_name: name }); reload(); } catch (e) { notify('ماتغيرش', errText(e), 'info'); }
+  });
+  $app.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => {
+    const g = groups.find(x => x.topic_id === Number(b.dataset.merge)); const others = allTopics.filter(x => x.id !== g.topic_id);
+    pickTopic(`دمج "${g.name}" في:`, others, async id => {
+      if (!confirm(`كل أسئلة "${g.name}" هتتنقل للموضوع المختار، و"${g.name}" هيتمسح. تكمّل؟`)) return false;
+      await rpc('topic_merge', { p_from: g.topic_id, p_into: id }); reload(); return true;
+    });
+  });
+  $app.querySelectorAll('[data-move]').forEach(b => b.onclick = () => {
+    const from = Number(b.dataset.from) || null;
+    pickTopic('اختار الموضوع:', allTopics.filter(x => x.id !== from), async id => {
+      const r = await rpc('set_question_topic', { p_qid: Number(b.dataset.move), p_topic_id: id });
+      notify(r === 'confirmed' ? 'اتنقل واتأكد' : 'اتنقل كمقترح', r === 'suggested' ? 'هيتأكد لما السؤال يتعتمد.' : ''); reload(); return true;
+    });
+  });
+  scrollTo(0, 0);
+}
+function pickTopic(title, topics, onPick) {
+  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>${esc(title)}</h2></div>
+    <div class="topic-list" role="radiogroup">${topics.map(x => `<label class="topic-opt"><input type="radio" name="tp2" value="${Number(x.id)}"> ${esc(x.name)}</label>`).join('') || '<p class="small muted">مفيش مواضيع تانية. أضف موضوع جديد الأول.</p>'}</div>
+    <div class="err" id="tp2-err" role="alert"></div><div class="foot"><button class="btn primary" id="tp2-ok">تمام</button></div>`);
+  sheet.querySelector('#tp2-ok').onclick = async () => {
+    const v = sheet.querySelector('input[name="tp2"]:checked'), e = sheet.querySelector('#tp2-err'); if (!v) { e.textContent = 'اختار موضوع.'; return; }
+    try { if (await onPick(Number(v.value)) !== false) close(true); } catch (x) { console.warn('topic pick:', x); e.textContent = errText(x); }
+  };
 }
 
 /* ---------- 4.8: question versions, before/after (migration 043 question_versions) ---------- */
@@ -1464,6 +1592,7 @@ function renderQuestion() {
     years ? `<span>ورد في: <b>${esc(years)}</b></span>` : '',
     q.source_question_no ? `<span>رقمه في المصدر: <b>${esc(q.source_question_no)}</b>${q.source_page ? ` (صفحة ${esc(q.source_page)})` : ''}${b.source?.pdf_page ? ` <button class="linkbtn pglink" type="button" data-page="${Number(b.source.pdf_page)}">📄 افتح الصفحة</button>` : ''}</span>` : '',
     tax.chapter ? `<span>الشابتر: <b>${esc(tax.chapter.map(x => x.name).join('، '))}</b></span>` : '',
+    '<span id="qtopic" class="qtopic" hidden></span>',
     `<span>الحالة: <b>${esc(STATUS_AR[q.status] || q.status)}</b></span>`
   ].join('');
 
@@ -1587,6 +1716,7 @@ function renderQuestion() {
   on('toggle-extra', () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); });
   fitActions();
   bindVersions();   // 4.8: "🗂️ نسخ السؤال" loads on first open
+  loadTopic();      // 5.2: the question's topic (backlog 102)
   on('qe', openQuickEdit);
   on('undo', openUndo);
   on('approve', () => {
@@ -2280,6 +2410,14 @@ function chapterCard(c) {
     { id: 'solve', name: 'حل', work: solveN > 0,
       text: solveN ? `${n('unsolved')} ينتظر الحل${n('unsolved') ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'})` : ''}${n('awaiting_reason') ? `، و${n('awaiting_reason')} ينتظر سبب الاختلاف` : ''}` : 'مفيش أسئلة تنتظر الحل',
       btn: solveN ? `<button class="btn primary" data-copy="${b ? `s${key}` : 'solve'}">انسخ رسالة الحل</button>${OPEN_CLAUDE}` : '' },
+    ...(c.topics_confirmed === undefined ? [] : [(() => {
+      const none = Math.max(0, n('total') - n('topics_confirmed') - n('topics_suggested'));
+      S.copyMsgs[`t${key}`] = msgTopics(c);
+      const chs = (c.chapters || []).map(x => `<a class="btn sec small" href="#topics/${Number(x.id)}">🏷️ ${esc(x.name)} (${Number(x.n)})</a>`).join('');
+      return { id: 'topics', name: 'مواضيع', work: n('total') > 0 && none > 0 && solveN === 0,
+        text: n('total') ? `${n('topics_confirmed')} متأكد · ${n('topics_suggested')} مقترح · ${none} مالهاش موضوع` : 'بعد الاستخراج والحل',
+        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${chs}` : '' };
+    })()]),
     { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0,
       text: n('awaiting_rebuild') ? `${n('awaiting_rebuild')} ينتظر إعادة التركيب` : 'لا شيء',
       btn: n('awaiting_rebuild') ? '<button class="btn sec" data-gofolder="rebuild">افتح الفولدر</button>' : '' },
@@ -2295,6 +2433,7 @@ function chapterCard(c) {
   const file = b ? [
     n('page_count') && n('pages_done') < n('page_count') ? `<span class="tag amber">صور الصفحات: ${n('pages_done')} من ${n('page_count')}</span><button class="linkbtn" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '',
     c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
+    n('total') === 0 ? `<button class="linkbtn danger" type="button" data-delrun="${Number(c.run_id)}">🗑️ مسح الشابتر</button>` : '',
   ].join('') : '';
   const recStep = steps.find(s => s.id === rec);
   const chips = [n('unsolved') + n('awaiting_reason') ? `${n('unsolved') + n('awaiting_reason')} للحل` : '', n('awaiting_rebuild') ? `${n('awaiting_rebuild')} تركيب` : '',
