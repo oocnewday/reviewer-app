@@ -534,3 +534,6 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .staff .chap-done>summary,.staff .solver-d>summary{cursor:pointer;list-style:none;font-weight:600;color:var(--cobalt);min-height:36px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .staff .solver-d{border-top:1px solid var(--line-2);padding:10px 0}
 .staff .solver-d .row{border-top:0}
+/* 5.1: versions set aside by a revert */
+.vers li.aside{opacity:.8}
+.rev-line{background:var(--surface);border-inline-start:3px solid var(--amber);padding:6px 10px;border-radius:6px;margin:6px 0}

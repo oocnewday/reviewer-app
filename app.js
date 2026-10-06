@@ -12,8 +12,8 @@ const msgExtract = (batch, file) => `${chatMsg('محادثة استخراج')}\n
 const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.0';
-const APP_BUILD = '5/10/2026';
+const APP_VERSION = '5.1';
+const APP_BUILD = '6/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -512,7 +512,13 @@ async function route() {
       renderQueue();
       if (S.listScroll) { const y = S.listScroll; requestAnimationFrame(() => scrollTo(0, y)); }
     }
-  } catch (e) { $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { location.hash = ''; route(); }; }
+  } catch (e) {
+    console.error('route:', e);
+    if (!location.hash && !S.viewReset) {   // 5.0.1: a broken saved view must never lock the app on its first screen
+      S.viewReset = true;
+      try { Object.assign(S.view, { folder: 'todo', showFilters: false, chapter: 'all', hidden: false, hiddenKind: 'all', conf: 'all', disagree: false, incomplete: false }); saveView(); renderQueue(); return; } catch (e2) { console.error('route retry:', e2); }
+    }
+    $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { location.hash = ''; route(); }; }
 }
 let lastHash = location.hash;
 window.addEventListener('hashchange', () => {
@@ -836,9 +842,17 @@ const verLabel = (v, list) => {
   if (l === 'reviewer_completion') return /^Returned to solving/.test(v.note || '') ? '🔁 رجّعه للحل' : '🛠️ إعادة تركيب';
   return { claude_extraction: '📥 الاستخراج', claude_solver: '🤖 حل Claude', claude_api_solver: '🤖 المحلّل الآلي', claude_revision: '🤖 تنفيذ Claude لطلب تعديل', claude: '🤖 تعديل Claude', reviewer_quick_edit: '⚡ تعديل سريع', reviewer: '📝 تعديل المراجع' }[l] || l;
 };
+const curOf = list => list.find(x => x.current);
+const isSetAside = (v, list) => { const c = curOf(list); return !!c && v.id > c.id; };
+function revertLine(list) {
+  const c = curOf(list); if (!c || !list.some(x => x.id > c.id)) return '';
+  const ev = (S.timeline || []).filter(e => /^returned_to_/.test(e.kind || '') && e.kind !== 'returned_to_solving')
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+  return `<p class="rev-line small">↩️ السؤال رجع للنسخة ${esc(c.version_no)}${ev ? ` (${esc(ago(ev.at))})` : ''}، والنسخ اللي بعدها محفوظة في التاريخ بس، ومش اللي الطلاب بيشوفوه.</p>`;
+}
 function versionsHTML(list) {
   if (!list.length) return '<p class="small muted">مفيش نسخ.</p>';
-  return `<ol class="vers">${list.slice().reverse().map((v, i, arr) => `<li><div><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v, list))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}</div>
+  return revertLine(list) + `<ol class="vers">${list.slice().reverse().map((v, i, arr) => `<li${isSetAside(v, list) ? ' class="aside"' : ''}><div><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v, list))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}${isSetAside(v, list) ? ' <span class="tag amber">↩️ اترجع عنها</span>' : ''}</div>
     <div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}<time datetime="${esc(v.at)}">${esc(ago(v.at))}</time>${i < arr.length - 1 ? ` · <button class="linkbtn cmpb" type="button" data-cmp-q="${Number(S.qid)}" data-cmp-v="${Number(v.version_no)}">🔍 قارن باللي قبلها</button>` : ''}</div></li>`).join('')}</ol>`;
 }
 function bindVersions() {
@@ -883,7 +897,7 @@ async function openCompare(qid, vn) {
     if (idx < 1) { body.textContent = 'مفيش نسخة قبل دي.'; return; }
     const v = list[idx], prev = list[idx - 1];
     body.className = '';
-    body.innerHTML = `<div class="cmp-head"><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v, list))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}<div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}${esc(ago(v.at))}، مقارنة بالنسخة ${esc(prev.version_no)} (${esc(verLabel(prev, list))})</div>${v.note ? `<div class="small" dir="auto">${nl(v.note)}</div>` : ''}</div>
+    body.innerHTML = `<div class="cmp-head"><b>النسخة ${esc(v.version_no)}</b> ${esc(verLabel(v, list))}${v.current ? ' <span class="tag ok">الحالية</span>' : ''}${isSetAside(v, list) ? ' <span class="tag amber">↩️ اترجع عنها</span>' : ''}<div class="small muted">${v.by ? `${esc(v.by)}، ` : ''}${esc(ago(v.at))}، مقارنة بالنسخة ${esc(prev.version_no)} (${esc(verLabel(prev, list))})</div>${v.note ? `<div class="small" dir="auto">${nl(v.note)}</div>` : ''}</div>
       <p class="hint">المشطوب اتشال، والمتعلّم عليه اتضاف.</p>${compareHTML(prev, v)}`;
   } catch (e) { console.warn('compare:', e); body.textContent = errText(e); }
 }
@@ -2217,7 +2231,7 @@ function staffCard() {
   const act = (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
   const openState = localStorage.getItem('staffOpen') === '1';
   S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
-  const body = S.chapters && S.chapters.length ? chapterList(S.chapters) : legacyRows(p);
+  const body = S.chapters && S.chapters.length ? chapterCardsHTML(S.chapters) : legacyRows(p);
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
     <span class="small muted" style="margin-inline-start:8px">${act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
@@ -2247,7 +2261,7 @@ function legacyRows(p) {
 // 5.0: chapters with work first (newest first), finished chapters (all approved, nothing to do) grouped at the end
 const chapOpen = () => { try { return JSON.parse(localStorage.getItem('chapOpen') || '[]'); } catch { return []; } };
 function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0; }
-function chapterList(list) {
+function chapterCardsHTML(list) {
   const sorted = list.slice().sort((a, b) => (chapWork(b) - chapWork(a)) || (Number(b.run_id) - Number(a.run_id)));
   const done = sorted.filter(c => !chapWork(c) && Number(c.total) > 0 && Number(c.approved) === Number(c.total));
   const active = sorted.filter(c => !done.includes(c));
