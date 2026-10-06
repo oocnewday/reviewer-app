@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.2';
-const APP_BUILD = '7/10/2026';
+const APP_VERSION = '5.4';
+const APP_BUILD = '8/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -388,7 +388,7 @@ const CONF_RANK = { low: 0, medium: 1, high: 2 };
 const VIEW_KEY = () => `view:${S.session?.user?.id}`;
 function loadView() {
   let v = {}; try { v = JSON.parse(localStorage.getItem(VIEW_KEY()) || '{}'); } catch { }
-  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all', showFilters: false, ...v };
+  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all', topic: 'all', showFilters: false, ...v };
 }
 function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.view)); } catch { } }
 /* 4.1: two more list filters, in the interface only (integration_backlog 31, 32).
@@ -397,7 +397,7 @@ function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.vi
    32 – hidden from students: any student_state that starts with "hidden_", with a sub-filter per kind that exists now,
         so a new hidden kind shows up by itself.
    Counts next to each choice = questions in the open folder that pass the other filters. The "rebuild" folder ignores them. */
-const NO_FILTERS = { conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all' };
+const NO_FILTERS = { conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all', topic: 'all' };
 const VISIBLE_STATES = new Set(['ai', 'reviewed']);
 const isHidden = r => String(r.student_state || '').startsWith('hidden_');
 const HIDDEN_SHORT = { hidden_disagree: 'اختلاف مع المصدر', hidden_low_confidence: 'ثقة منخفضة', hidden_incomplete: 'ناقص', hidden_completed: 'اختياراته من المراجع', hidden_no_source: 'المصدر من غير إجابة', hidden_answer_fix: 'لحد تصليح الإجابة', hidden_admin: 'بقرار الإدارة', hidden_archived: 'مؤرشف' };
@@ -422,18 +422,72 @@ function applyFilters(rows, view, skip) {
   if (view.incomplete) rows = rows.filter(r => r.is_incomplete);
   if (skip !== 'chapter' && view.chapter && view.chapter !== 'all') rows = rows.filter(r => r.chapter === view.chapter);
   if (skip !== 'hidden' && view.hidden) rows = rows.filter(r => isHidden(r) && (!view.hiddenKind || view.hiddenKind === 'all' || r.student_state === view.hiddenKind));
+  if (skip !== 'topic' && view.topic && view.topic !== 'all' && S.topicC) {   // 5.3 (migration 048)
+    const t = view.topic;
+    rows = rows.filter(r => !S.topicC.has(r.qid) && (t === 'pending' || (t === 'suggested' ? S.topicS.has(r.qid) : !S.topicS.has(r.qid))));
+  }
   return rows;
+}
+/* 5.3: the folders as a grid in three groups (every folder visible, same-size tiles; a folder with work for you gets a
+   coloured count), and the filters as sections, each with one line saying exactly what it brings back. */
+const FOLDER_GROUPS = [['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
+const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups']);
+const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات الطلاب' };   // shorter on the tile; the list title keeps the full name
+function folderGrid(v, counts, isRb) {
+  const show = id => (id !== 'drafts' || counts.drafts || v.folder === 'drafts') && (id !== 'rebuild' || counts.rebuild || isRb) && (id !== 'dups' || counts.dups || v.folder === 'dups');
+  return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, ids]) => {
+    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && show(f.id));
+    return tiles.length ? `<div class="fg-h">${title}</div><div class="fg">${tiles.map(f => `<button class="ftile${counts[f.id] ? '' : ' zero'}${HOT.has(f.id) && counts[f.id] ? ' hot' : ''}" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}"><span class="ft-l">${TILE_LABEL[f.id] || f.label}</span><span class="ft-n">${counts[f.id]}</span></button>`).join('')}</div>` : '';
+  }).join('')}</nav>`;
+}
+function filtersPanel(v, fx) {
+  const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
+  const n = patch => applyFilters(inFolder, { ...v, ...patch }).length;
+  const tog = (id, on, label, cnt, help) => `<div class="frow"><button class="chip" aria-pressed="${on}" id="${id}">${label}<span class="n">${cnt}</span></button><p class="fhelp">${help}</p></div>`;
+  let topic = '';
+  if (S.topicC) {
+    const pend = (v.topic || 'all') !== 'all';
+    const base = applyFilters(inFolder, v, 'topic').filter(r => !S.topicC.has(r.qid));
+    const sug = base.filter(r => S.topicS.has(r.qid)).length;
+    topic = `<div class="frow"><button class="chip" aria-pressed="${pend}" data-topic="${pend ? 'all' : 'pending'}">🏷️ منتظر التصنيف<span class="n">${base.length}</span></button><p class="fhelp">موضوعه لسه ماتأكدش. المقترح بيتأكد مع الاعتماد، أو من "مواضيع الشابتر".</p></div>
+      ${pend ? `<div class="chips sub"><button class="chip" aria-pressed="${v.topic === 'suggested'}" data-topic="suggested">مقترح<span class="n">${sug}</span></button><button class="chip" aria-pressed="${v.topic === 'none'}" data-topic="none">مالوش موضوع<span class="n">${base.length - sug}</span></button></div>` : ''}`;
+  }
+  return `<div class="filters">
+    <div class="fsec"><div class="fsec-h">🤖 ثقة Claude</div><p class="fhelp">قد إيه Claude كان متأكد من حله.</p>
+      <div class="chips" style="padding-bottom:4px">${[['all', 'الكل'], ['high', 'عالية'], ['medium', 'متوسطة'], ['low', 'منخفضة']].map(([k, l]) => `<button class="chip" aria-pressed="${v.conf === k}" data-conf="${k}">${l}</button>`).join('')}</div></div>
+    ${fx.ch}
+    <div class="fsec"><div class="fsec-h">🔎 حالة السؤال</div><p class="fhelp">بتدوّر في كل الأسئلة: الظاهرة للطلاب والمخفية.</p>
+      ${tog('f-dis', v.disagree, '≠ كل المختلف مع المصدر', v.disagree ? n({}) : n({ disagree: true }), 'حل Claude فيه غير إجابة الملف، حتى لو اتعتمد وبقى ظاهر للطلاب.')}
+      ${tog('f-inc', v.incomplete, '◐ كل الناقص', v.incomplete ? n({}) : n({ incomplete: true }), 'السؤال كان ناقص في الملف، حتى لو اتكمّل واتعتمد.')}
+      ${topic}</div>
+    <div class="fsec"><div class="fsec-h">👁️ الظهور للطلاب</div>
+      ${tog('f-hid', !!v.hidden, '🙈 المخفي عن الطلاب', v.hidden ? n({ hiddenKind: 'all' }) : n({ hidden: true, hiddenKind: 'all' }), 'أسئلة مش ظاهرة للطلاب دلوقتي. الأسباب بتظهر تحته لما تختاره.')}
+      ${fx.hid}</div>
+  </div>`;
+}
+// the active filters, always visible above the list, each with its own ✕
+function activeLine(v) {
+  const it = [];
+  const x = (label, patch) => it.push(`<button class="achip" type="button" data-unset='${esc(JSON.stringify(patch))}' aria-label="شيل ${esc(label)}">${esc(label)} ✕</button>`);
+  if (v.conf !== 'all') x(`ثقة ${({ high: 'عالية', medium: 'متوسطة', low: 'منخفضة' })[v.conf] || v.conf}`, { conf: 'all' });
+  if (v.chapter !== 'all') x(v.chapter, { chapter: 'all' });
+  if (v.disagree) x('كل المختلف', { disagree: false });
+  if (v.incomplete) x('كل الناقص', { incomplete: false });
+  if (S.topicC && v.topic && v.topic !== 'all') x(v.topic === 'suggested' ? 'موضوع مقترح' : v.topic === 'none' ? 'مالوش موضوع' : 'منتظر التصنيف', { topic: 'all' });
+  if (v.hidden) x(v.hiddenKind && v.hiddenKind !== 'all' ? `مخفي: ${hiddenLabel(v.hiddenKind)}` : 'المخفي', { hidden: false, hiddenKind: 'all' });
+  return `<div class="aline"><span class="small muted">التصفية:</span>${it.join('')}<button class="linkbtn small" id="f-clear">مسح الكل</button></div>`;
 }
 function facetHTML(v) {
   const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
   const chRows = applyFilters(inFolder, v, 'chapter'), chN = countBy(chRows, r => r.chapter), chapters = chapterList();
   const chip = (attr, k, label, n, on) => `<button class="chip" aria-pressed="${on}" ${attr}="${esc(k)}"><bdi>${esc(label)}</bdi><span class="n">${n}</span></button>`;
-  const ch = chapters.length ? `<div class="lbl">الشابتر (الظاهر للطلاب)</div>
-      <div class="chips" style="padding-bottom:4px" aria-label="الشابتر">${chip('data-chapter', 'all', 'الكل', chRows.length, v.chapter === 'all')}${chapters.map(c => chip('data-chapter', c, c, chN[c] || 0, v.chapter === c)).join('')}</div>` : '';
+  const ch = chapters.length ? `<div class="fsec"><div class="fsec-h">📚 الشابتر</div><p class="fhelp">الشباتر اللي فيها أسئلة ظاهرة للطلاب، والعدد جوه الفولدر ده.</p>
+      <div class="chips" style="padding-bottom:4px" aria-label="الشابتر">${chip('data-chapter', 'all', 'الكل', chRows.length, v.chapter === 'all')}${chapters.map(c => chip('data-chapter', c, c, chN[c] || 0, v.chapter === c)).join('')}</div></div>` : '';
   let hid = '';
   if (v.hidden) {
     const hRows = applyFilters(inFolder, v, 'hidden').filter(isHidden), hN = countBy(hRows, r => r.student_state), hk = v.hiddenKind || 'all';
-    hid = `<div class="chips sub" aria-label="نوع المخفي">${chip('data-hkind', 'all', 'كل المخفي', hRows.length, hk === 'all')}${hiddenKinds().map(k => chip('data-hkind', k, hiddenLabel(k), hN[k] || 0, hk === k)).join('')}</div>`;
+    hid = `<div class="chips sub" aria-label="سبب الإخفاء">${hiddenKinds().map(k => chip('data-hkind', k, hiddenLabel(k), hN[k] || 0, hk === k)).join('')}</div>
+      <p class="fhelp">${hk !== 'all' && STUDENT_STATE[hk] ? esc(STUDENT_STATE[hk][0].replace(/<[^>]+>/g, '')) + '. دوس عليه تاني علشان ترجع لكل المخفي.' : 'كل المخفي ظاهر دلوقتي. اختار سبب علشان تشوف أسئلته بس.'}</p>`;
   }
   return { ch, hid };
 }
@@ -460,7 +514,9 @@ async function loadQueue() {
     // v4.8: chapter cards (migration 039). Missing function or no network: the panel falls back to the two 4.7-style rows.
     tasks.push(rpc('chapter_runs_status').catch(e => { console.warn('chapter_runs_status:', e && e.message); return null; }));
   }
+  const ts = rpc('topic_states').catch(e => { console.warn('topic_states:', e && e.message); return null; });   // 5.3 (migration 048)
   const [q, n, , , p, ch] = await Promise.all(tasks);
+  const tsv = await ts; S.topicC = tsv ? new Set(tsv.c || []) : null; S.topicS = tsv ? new Set(tsv.s || []) : null;
   S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.chapters = Array.isArray(ch) ? ch : null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
   S.queue = S.rows.filter(FOLDERS[0].test);
   S.rebuild = (await rb) || [];
@@ -524,7 +580,7 @@ async function route() {
     console.error('route:', e);
     if (!location.hash && !S.viewReset) {   // 5.0.1: a broken saved view must never lock the app on its first screen
       S.viewReset = true;
-      try { Object.assign(S.view, { folder: 'todo', showFilters: false, chapter: 'all', hidden: false, hiddenKind: 'all', conf: 'all', disagree: false, incomplete: false }); saveView(); renderQueue(); return; } catch (e2) { console.error('route retry:', e2); }
+      try { Object.assign(S.view, { folder: 'todo', showFilters: false, ...NO_FILTERS }); saveView(); renderQueue(); return; } catch (e2) { console.error('route retry:', e2); }
     }
     $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { location.hash = ''; route(); }; }
 }
@@ -570,7 +626,7 @@ function renderQueue() {
   const counts = Object.fromEntries(FOLDERS.map(f => [f.id, S.rows.filter(f.test).length]));
   counts.rebuild = (S.rebuild || []).length;
   const isRb = v.folder === 'rebuild';
-  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + (v.chapter !== 'all') + !!v.hidden;
+  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + (v.chapter !== 'all') + !!v.hidden + (!!S.topicC && (v.topic || 'all') !== 'all');
   const fx = !isRb && v.showFilters ? facetHTML(v) : { ch: '', hid: '' };
   const shown = list.slice(0, S.listLimit || 60);
   const items = isRb ? shown.map(rbItem).join('') : shown.map(r => `<li><a href="#q/${r.qid}">
@@ -582,23 +638,13 @@ function renderQueue() {
     ${staffCard()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
-    <div class="chips" role="tablist" aria-label="الفولدرات">${FOLDERS.filter(f => (f.id !== 'drafts' || counts.drafts || v.folder === 'drafts') && (f.id !== 'rebuild' || counts.rebuild || isRb) && (f.id !== 'dups' || counts.dups || v.folder === 'dups')).map(f => `<button class="chip" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}">${f.label}<span class="n">${counts[f.id]}</span></button>`).join('')}</div>
+    ${folderGrid(v, counts, isRb)}
     ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn" id="tog-f" aria-expanded="${v.showFilters}">تصفية${activeFilters ? ` (${activeFilters})` : ''}</button>
     </div>
-    ${v.showFilters ? `<div class="filters">
-      <div class="lbl">درجة ثقة Claude</div>
-      <div class="chips" style="padding-bottom:4px">${[['all', 'الكل'], ['high', 'عالية'], ['medium', 'متوسطة'], ['low', 'منخفضة']].map(([k, l]) => `<button class="chip" aria-pressed="${v.conf === k}" data-conf="${k}">${l}</button>`).join('')}</div>
-      ${fx.ch}
-      <div class="chips" style="padding-bottom:0">
-        <button class="chip" aria-pressed="${v.disagree}" id="f-dis">المختلف مع المصدر فقط</button>
-        <button class="chip" aria-pressed="${v.incomplete}" id="f-inc">الناقص فقط</button>
-        <button class="chip" aria-pressed="${!!v.hidden}" id="f-hid">المخفي عن الطلاب فقط</button>
-      </div>
-      ${fx.hid}
-      ${activeFilters ? '<div class="chips" style="padding:8px 0 0"><button class="chip" id="f-clear">مسح التصفية</button></div>' : ''}
-    </div>` : ''}`}
+    ${v.showFilters ? filtersPanel(v, fx) : ''}`}
+    ${activeFilters ? activeLine(v) : ''}
     <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
@@ -620,8 +666,10 @@ function renderQueue() {
   const fi = document.getElementById('f-inc'); if (fi) fi.onclick = () => set({ incomplete: !v.incomplete });
   const fh = document.getElementById('f-hid'); if (fh) fh.onclick = () => set({ hidden: !v.hidden, hiddenKind: 'all' });
   $app.querySelectorAll('[data-chapter]').forEach(b => b.onclick = () => set({ chapter: b.dataset.chapter }));
-  $app.querySelectorAll('[data-hkind]').forEach(b => b.onclick = () => set({ hiddenKind: b.dataset.hkind }));
+  $app.querySelectorAll('[data-hkind]').forEach(b => b.onclick = () => set({ hiddenKind: b.dataset.hkind === v.hiddenKind ? 'all' : b.dataset.hkind }));   // 5.3: tap again = all hidden
   const fc = document.getElementById('f-clear'); if (fc) fc.onclick = () => set({ ...NO_FILTERS });
+  $app.querySelectorAll('[data-topic]').forEach(b => b.onclick = () => set({ topic: b.dataset.topic === v.topic && b.dataset.topic !== 'pending' ? 'pending' : b.dataset.topic === v.topic ? 'all' : b.dataset.topic }));
+  $app.querySelectorAll('[data-unset]').forEach(b => b.onclick = () => set(JSON.parse(b.dataset.unset)));
   document.getElementById('goto').onsubmit = ev => {
     ev.preventDefault();
     const m = String(document.getElementById('goto-n').value || '').match(/\d+/);   // 4.7: also "Q ID 000112" pasted from the student app
@@ -646,7 +694,7 @@ function renderQueue() {
   $app.querySelectorAll('[data-delrun]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.delrun)); if (c) deleteChapter(c); });
   $app.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.link)); if (c) openDriveLink(c); });
   $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
-  $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
+  $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.fgrid') || document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
   bindInstall();
   const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
   if (S.isAdmin && S.pipeline) loadSolver();
@@ -1556,9 +1604,57 @@ function go(r) {
 function fitActions() {
   const a = $app.querySelector('.actions'), m = document.getElementById('qmain');
   if (!a || !m) return;
-  m.style.paddingBottom = Math.max(140, Math.ceil(a.getBoundingClientRect().height) + 24) + 'px';
+  if (window.ResizeObserver && a !== S.fitObserved) {   // 5.4: re-fit when the bar itself grows (bigger text, wrapped buttons)
+    if (S.fitRO) S.fitRO.disconnect();
+    S.fitRO = new ResizeObserver(() => fitActions()); S.fitRO.observe(a); S.fitObserved = a;
+  }
+  const h = Math.ceil(a.getBoundingClientRect().height);
+  m.style.paddingBottom = Math.max(140, h + 24) + 'px';
+  document.documentElement.style.setProperty('--actions-h', h + 'px');   // 5.4: the back-to-top button sits above the bar
 }
 window.addEventListener('resize', () => fitActions());
+/* 5.4: the question page – sticky section tabs (jump + current section), a back-to-top button, and one small ℹ️ on the
+   action bar that explains every button. Nothing here changes what a button does. */
+const QTABS = [['qs-sum', '📋', 'الملخص'], ['qs-q', '❓', 'السؤال'], ['qs-opts', '🔘', 'الاختيارات'], ['qs-ref', '📚', 'المرجع'], ['qs-hist', '🕘', 'التاريخ']];
+const BTN_HELP = [
+  ['✅ موافق', 'السؤال سليم: بيتعتمد، ويظهر للطلاب على إنه "Reviewed"، وموضوعه المقترح بيتأكد معاه.'],
+  ['📝 ملاحظة للطلاب', 'سطر قصير بيظهر للطلاب مع السؤال بعد الاعتماد (تنبيه أو توضيح).'],
+  ['✏️ محتاج تعديل / اطلب تعديلًا', 'بتكتب أو بتسجّل المطلوب، ومحادثة التعديلات بتنفّذه، والسؤال بيرجعلك تعتمده.'],
+  ['⚡ تعديل سريع', 'تصليح صغير بإيدك (كلمة أو حرف) من غير محادثة، وبسبب مكتوب. السؤال بيرجع للاعتماد.'],
+  ['↩️ رجوع…', 'بترجّع السؤال لنسخته اللي قبل آخر تعديل، أو لنسخة Claude الأصلية. ومفيش نسخة بتتمسح.'],
+  ['🔁 رجّعه للحل من جديد', 'للتعديل الكبير بس (اختيارات أو معنى بيتغير): السؤال بيختفي عن الطلاب ويتحل من الأول.'],
+];
+function bindQuestionNav() {
+  const tabs = document.getElementById('qtabs'), bar = document.querySelector('.bar');
+  if (!tabs) return;
+  tabs.style.top = (bar ? Math.round(bar.getBoundingClientRect().height) : 0) + 'px';   // sticky right under the app bar
+  const topH = () => (bar ? bar.getBoundingClientRect().height : 0) + tabs.getBoundingClientRect().height + 8;
+  tabs.querySelectorAll('[data-jump]').forEach(a => a.onclick = e => {
+    e.preventDefault(); const el = document.getElementById(a.dataset.jump); if (!el) return;
+    S.qnavPick = { id: a.dataset.jump, until: Date.now() + 900 };   // the tapped tab stays lit while the page glides there
+    tabs.querySelectorAll('[data-jump]').forEach(x => x.classList.toggle('on', x === a));
+    scrollTo({ top: el.getBoundingClientRect().top + scrollY - topH(), behavior: 'smooth' });
+  });
+  const secs = QTABS.map(([id]) => document.getElementById(id)).filter(Boolean), up = document.getElementById('totop');
+  let tick = false;
+  const mark = () => {
+    tick = false; if (!document.getElementById('qtabs')) return;
+    const y = topH() + 4; let cur = secs[0] && secs[0].id;
+    for (const el of secs) if (el.getBoundingClientRect().top <= y) cur = el.id;
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4 && secs.length) cur = secs[secs.length - 1].id;   // the page ends: the last section is the one on screen
+    if (S.qnavPick && Date.now() < S.qnavPick.until) cur = S.qnavPick.id;
+    tabs.querySelectorAll('[data-jump]').forEach(a => a.classList.toggle('on', a.dataset.jump === cur));
+    if (up) up.hidden = scrollY < 700;
+  };
+  if (S.qnavScroll) removeEventListener('scroll', S.qnavScroll);
+  S.qnavScroll = () => { if (!tick) { tick = true; requestAnimationFrame(mark); } };
+  addEventListener('scroll', S.qnavScroll, { passive: true }); mark();
+  if (up) up.onclick = () => scrollTo({ top: 0, behavior: 'smooth' });
+  const hb = document.getElementById('bar-help');
+  if (hb) hb.onclick = () => openSheet(`<div class="sheet-head"><h2>ℹ️ الزراير بتعمل إيه؟</h2></div>
+    <dl class="bhelp">${BTN_HELP.map(([k, d]) => `<dt>${k}</dt><dd>${d}</dd>`).join('')}</dl>
+    <p class="hint">الزراير اللي بتظهر بتختلف حسب حالة السؤال وصلاحيتك. وأي حاجة بتتعمل بتتسجل في "تاريخ السؤال".</p>`);
+}
 function renderQuestion() {
   stopSolverTimer();
   const b = S.bundle, q = b.question, v = b.current_version || {}, tax = b.taxonomy || {};
@@ -1678,43 +1774,56 @@ function renderQuestion() {
   $app.innerHTML = topBar(`<button class="linkbtn" id="back" aria-label="رجوع للقائمة">→ القائمة</button><span class="grow"></span>
     <span class="pos">${nav.i >= 0 ? `${nav.i + 1} من ${nav.list.length}` : 'خارج القائمة'}<span class="fl"> · ${esc(folderLabel)}</span></span>
     <span class="nav"><button class="navbtn" id="prev" aria-label="السؤال السابق" title="السابق" ${nav.prev ? '' : 'disabled'}><span dir="ltr">→</span></button><button class="navbtn" id="next" aria-label="السؤال التالي" title="التالي" ${nav.next ? '' : 'disabled'}><span dir="ltr">←</span></button></span>`) + `
-  <main class="wrap" id="qmain">
-    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-      <h1 style="margin:4px 0 0;font-size:1.5rem">سؤال ${esc(q.qid_display)}</h1>
-      <span class="small muted" dir="ltr">${esc(q.code || '')}</span>
-    </div>
-    <div class="facts">${facts}</div>
-    ${studentRowHTML(b, q)}
-    ${draftPanels}
-    ${verdict}
-    ${alertCardHTML(split.alert, b.source)}
-    ${reportSectionHTML(q)}
-    ${(b.duplicates || []).map(dupCardHTML).join('')}
-    ${reqPanel}
-    ${round2}
-    ${incomplete}
-    <article class="content" lang="en">
-      <p class="stem">${T(v.stem, base?.stem)}</p>
-      ${v.explanation_main ? `<div class="expl"><span class="lbl">الشرح</span>${T(v.explanation_main, base?.explanation_main)}</div>` : ''}
-      ${extraOn && v.explanation_extra ? `<div class="expl extra"><span class="lbl">مزيد من الشرح</span>${T(v.explanation_extra, base?.explanation_extra)}</div>` : ''}
-      <ul class="opts">${opts}</ul>
-    </article>
-    <p><button class="btn block" id="toggle-extra" aria-expanded="${extraOn}">${extraOn ? 'إخفاء مزيد من الشرح' : 'مزيد من الشرح'}</button></p>
-    ${refLine}
-    ${studentNote}
-    ${hand}
-    ${hist}
-    ${access < 2 ? `<section class="panel"><p style="margin:0">صلاحيتك على هذا السؤال قراءة فقط.</p></section>` : ''}
-    ${rsv}
+  <main class="wrap qpage" id="qmain">
+    <div class="qtitle"><h1>سؤال ${esc(q.qid_display)}</h1><span class="small muted" dir="ltr">${esc(q.code || '')}</span></div>
+    <nav class="qtabs" id="qtabs" aria-label="أجزاء الصفحة">${QTABS.map(([id, ic, l]) => `<a href="#${id}" data-jump="${id}"><span aria-hidden="true">${ic}</span>${l}</a>`).join('')}</nav>
+    <section class="qsec" id="qs-sum">
+      <div class="facts">${facts}</div>
+      ${studentRowHTML(b, q)}
+      ${draftPanels}
+      ${verdict}
+      ${alertCardHTML(split.alert, b.source)}
+      ${reportSectionHTML(q)}
+      ${(b.duplicates || []).map(dupCardHTML).join('')}
+      ${reqPanel}
+      ${round2}
+      ${incomplete}
+    </section>
+    <section class="qsec" id="qs-q">
+      <h2 class="qsec-h">❓ السؤال والشرح</h2>
+      <article class="content" lang="en">
+        <p class="stem">${T(v.stem, base?.stem)}</p>
+        ${v.explanation_main ? `<div class="expl"><span class="lbl">الشرح</span>${T(v.explanation_main, base?.explanation_main)}</div>` : ''}
+        ${extraOn && v.explanation_extra ? `<div class="expl extra"><span class="lbl">مزيد من الشرح</span>${T(v.explanation_extra, base?.explanation_extra)}</div>` : ''}
+      </article>
+    </section>
+    <section class="qsec" id="qs-opts">
+      <h2 class="qsec-h">🔘 الاختيارات</h2>
+      <article class="content" lang="en"><ul class="opts">${opts}</ul></article>
+      <p><button class="btn block" id="toggle-extra" aria-expanded="${extraOn}">${extraOn ? 'إخفاء مزيد من الشرح' : 'مزيد من الشرح'}</button></p>
+    </section>
+    <section class="qsec" id="qs-ref">
+      <h2 class="qsec-h">📚 المرجع والملاحظات</h2>
+      ${refLine || '<p class="small muted">مفيش مرجع مكتوب.</p>'}
+      ${studentNote}
+      ${hand}
+    </section>
+    <section class="qsec" id="qs-hist">
+      ${hist}
+      ${access < 2 ? `<section class="panel"><p style="margin:0">صلاحيتك على هذا السؤال قراءة فقط.</p></section>` : ''}
+      ${rsv}
+    </section>
     <p class="small muted" style="text-align:center;margin-top:18px">اسحب يمينًا أو شمالًا للتنقل بين الأسئلة</p>
+    <button class="totop" id="totop" type="button" aria-label="لأول الصفحة" hidden>⬆️</button>
   </main>
-  ${bar ? `<div class="actions"><div class="actions-in">${bar}</div></div>` : ''}`;
+  ${bar ? `<div class="actions"><button class="bar-help" id="bar-help" type="button" aria-label="إيه الفرق بين الزراير؟">ℹ️</button><div class="actions-in">${bar}</div></div>` : ''}`;
 
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on('back', () => { location.hash = ''; });
   on('prev', () => go(nav.prev)); on('next', () => go(nav.next));
   on('toggle-extra', () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); });
   fitActions();
+  bindQuestionNav();   // 5.4: section tabs, back to top, buttons help
   bindVersions();   // 4.8: "🗂️ نسخ السؤال" loads on first open
   loadTopic();      // 5.2: the question's topic (backlog 102)
   on('qe', openQuickEdit);
