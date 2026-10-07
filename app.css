@@ -546,6 +546,36 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .topic-list{display:flex;flex-direction:column;gap:4px;margin:8px 0;max-height:50vh;overflow:auto}
 .topic-opt{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 8px;border:1px solid var(--line-2);border-radius:8px}
 .topic-opt input{width:20px;height:20px}
+/* 5.5: new topic from the question page, and the undo sheet's line when there is no original to go back to */
+.tp-new{margin:2px 0 4px}
+#tp-new-box:not([hidden]){display:grid;gap:6px;margin-top:6px}
+.u-none{margin-top:12px;line-height:1.6}
+/* 5.6: up to 3 topics, one primary */
+.qpage .facts>span.wide{grid-column:1/-1}
+.qpage .facts{grid-auto-flow:row dense}
+.topic-list>*{flex-shrink:0}
+.tpl{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:2px}
+.tpl li{color:var(--ink);font-weight:600}
+.tpl li:not(.main){font-weight:500;color:var(--ink-2)}
+.tpl li:not(.main)::before{content:"• ";color:var(--ink-3,var(--ink-2))}
+.tp-row{justify-content:space-between;flex-wrap:wrap;gap:6px 10px}
+.tp-row.on{border-color:var(--cobalt)}
+.tp-row.prim{background:var(--cobalt-2)}
+.tp-pick{display:flex;align-items:center;gap:10px;flex:1 1 180px;min-height:40px;cursor:pointer}
+.tp-pick input{width:20px;height:20px;flex:none}
+.tp-star{display:flex;align-items:center;gap:6px;font-size:.85rem;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);white-space:nowrap;cursor:pointer}
+.tp-star input{width:18px;height:18px}
+.tp-why{margin:4px 0 6px}
+.tp-why.need{color:var(--warn);font-weight:600}
+.tp-new-row{display:flex;gap:8px}
+.tp-new-row input{flex:1;min-width:0}
+.tp-note{min-height:0;margin:4px 0 0;color:var(--ok)}
+.tp-note:empty{display:none}
+/* 5.6: the filter button says what it is and shows when a filter is on */
+.btn.f-on{background:var(--cobalt-2);border-color:var(--cobalt);color:var(--cobalt);font-weight:700}
+.fhint{display:flex;align-items:flex-start;gap:8px;margin:-2px 0 10px;padding:8px 10px;border-radius:10px;background:var(--cobalt-2);color:var(--ink-2);line-height:1.6}
+.fhint>span{flex:1;min-width:0}
+.fhint .linkbtn{flex:none;padding:0 4px;min-height:28px}
 .tgroup{background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:8px 12px;margin:8px 0}
 .tgroup>summary{cursor:pointer;min-height:40px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tqs{list-style:none;margin:6px 0 0;padding:0}

@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.4';
-const APP_BUILD = '8/10/2026';
+const APP_VERSION = '5.6';
+const APP_BUILD = '7/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -80,6 +80,10 @@ function errText(e) {
   // 5.2: topics (migration 046)
   if (/TOPIC_CHAPTER/.test(m)) return 'الموضوع ده مش من مواضيع شابتر السؤال.';
   if (/TOPIC_EXISTS/.test(m)) return 'فيه موضوع بنفس الاسم في الشابتر ده.';
+  if (/TOPIC_COUNT/.test(m)) return 'السؤال ليه من موضوع لـ 3 مواضيع.';
+  if (/TOPIC_PRIMARY/.test(m)) return 'حدد الموضوع الأساسي ⭐ الأول.';
+  if (/TOPIC_LATIN/.test(m)) return 'اكتب اسم الموضوع بالإنجليزي، زي ما في المراجع.';
+  if (/Topic name must be 3 to 80/i.test(m)) return 'اسم الموضوع لازم يكون من 3 لـ 80 حرف.';
   if (/TOPIC_MERGE/.test(m)) return 'الدمج بيكون بين موضوعين مختلفين في نفس الشابتر.';
   if (/CHAPTER_HAS_QUESTIONS/.test(m)) return 'الشابتر ده فيه أسئلة، فمش هينفع يتمسح.';
   // 4.8: return to solving (backlog 37, migration 043)
@@ -380,7 +384,7 @@ const FOLDERS = [
   { id: 'notes', label: 'ملاحظات للطلاب', test: r => !!r.note_state },
   { id: 'approved', label: 'معتمدة', test: r => r.status === 'approved' },
   { id: 'alerts', label: 'فيها تنبيه ⚠️', test: r => !!(r.alert_kinds && r.alert_kinds.length) },   // 3.9: "⚠️ للمراجع" block (backlog 24); kept before 'all' so navigation inside folders is unchanged
-  { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the chip shows only when it has questions
+  { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the tile always shows (5.5)
   { id: 'all', label: 'الكل', test: () => true },
 ];
 const SORTS = { priority: 'الأولوية (المختلف والأقل ثقة أولًا)', id_asc: 'رقم السؤال: تصاعدي', id_desc: 'رقم السؤال: تنازلي', conf_low: 'الثقة: الأقل أولًا', conf_high: 'الثقة: الأعلى أولًا' };
@@ -433,13 +437,16 @@ function applyFilters(rows, view, skip) {
 const FOLDER_GROUPS = [['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
 const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups']);
 const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات الطلاب' };   // shorter on the tile; the list title keeps the full name
-function folderGrid(v, counts, isRb) {
-  const show = id => (id !== 'drafts' || counts.drafts || v.folder === 'drafts') && (id !== 'rebuild' || counts.rebuild || isRb) && (id !== 'dups' || counts.dups || v.folder === 'dups');
+function folderGrid(v, counts) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
   return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, ids]) => {
-    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && show(f.id));
+    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(Boolean);
     return tiles.length ? `<div class="fg-h">${title}</div><div class="fg">${tiles.map(f => `<button class="ftile${counts[f.id] ? '' : ' zero'}${HOT.has(f.id) && counts[f.id] ? ' hot' : ''}" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}"><span class="ft-l">${TILE_LABEL[f.id] || f.label}</span><span class="ft-n">${counts[f.id]}</span></button>`).join('')}</div>` : '';
   }).join('')}</nav>`;
 }
+// 5.6 (owner 7/10): a line under "🔍 تصفية" says what it holds, until the reviewer opens it once or closes the line (per device)
+const FHINT_KEY = 'ooc-review-fhint';
+const fhintDone = () => { if (S.fhint) return true; try { return localStorage.getItem(FHINT_KEY) === '1'; } catch (e) { return false; } };
+const fhintSeen = () => { S.fhint = true; try { localStorage.setItem(FHINT_KEY, '1'); } catch (e) { /* storage blocked: hidden for this visit only */ } };
 function filtersPanel(v, fx) {
   const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
   const n = patch => applyFilters(inFolder, { ...v, ...patch }).length;
@@ -638,17 +645,18 @@ function renderQueue() {
     ${staffCard()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
-    ${folderGrid(v, counts, isRb)}
+    ${folderGrid(v, counts)}
     ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <button class="btn" id="tog-f" aria-expanded="${v.showFilters}">تصفية${activeFilters ? ` (${activeFilters})` : ''}</button>
+      <button class="btn${activeFilters ? ' f-on' : ''}" id="tog-f" aria-expanded="${v.showFilters}">🔍 تصفية${activeFilters ? ` (${activeFilters})` : ''} <span aria-hidden="true">${v.showFilters ? '▴' : '▾'}</span></button>
     </div>
+    ${!v.showFilters && !fhintDone() ? `<p class="hint fhint" id="fhint"><span>🔍 <b>تصفية</b>: اختار الأسئلة حسب الشابتر، أو ثقة Claude، أو الاختلاف مع المصدر، أو منتظر التصنيف.</span><button class="linkbtn quiet" type="button" id="fhint-x" aria-label="إخفاء الشرح">✕</button></p>` : ''}
     ${v.showFilters ? filtersPanel(v, fx) : ''}`}
     ${activeFilters ? activeLine(v) : ''}
     <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
-      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
+      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
     ${installListCard()}
     ${appFooter()}
   </main>`;
@@ -661,7 +669,8 @@ function renderQueue() {
   $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => set({ folder: b.dataset.folder }));
   $app.querySelectorAll('[data-conf]').forEach(b => b.onclick = () => set({ conf: b.dataset.conf }));
   const so = document.getElementById('sort'); if (so) so.onchange = e => set({ sort: e.target.value });
-  const tf = document.getElementById('tog-f'); if (tf) tf.onclick = () => set({ showFilters: !v.showFilters });
+  const tf = document.getElementById('tog-f'); if (tf) tf.onclick = () => { fhintSeen(); set({ showFilters: !v.showFilters }); };
+  const fx2 = document.getElementById('fhint-x'); if (fx2) fx2.onclick = () => { fhintSeen(); document.getElementById('fhint')?.remove(); };
   const fd = document.getElementById('f-dis'); if (fd) fd.onclick = () => set({ disagree: !v.disagree });
   const fi = document.getElementById('f-inc'); if (fi) fi.onclick = () => set({ incomplete: !v.incomplete });
   const fh = document.getElementById('f-hid'); if (fh) fh.onclick = () => set({ hidden: !v.hidden, hiddenKind: 'all' });
@@ -881,37 +890,105 @@ async function reloadQuestion() {
    A topic is a taxonomy item under the question's chapter. The topics chat suggests; a reviewer (access >= 2) may change it;
    approving the question confirms it (server trigger), and on an approved question the reviewer's change is confirmed at once.
    Only confirmed topics reach students. A missing function (before 046) simply hides the line. */
+// 5.6 (migration 06X, owner 6/10): a question has 1 to 3 topics; the primary (⭐) shows first on the student's question screen.
+// The sets come primary first; the old single fields are the fallback for a server before 06X.
+const topicSets = t => {
+  const conf = t.confirmed_all || (t.confirmed ? [t.confirmed] : []), sug = t.suggested_all || (t.suggested ? [t.suggested] : []);
+  return { conf, sug, list: sug.length ? sug : conf };
+};
+const topicNames = list => list.length > 1
+  ? `<ul class="tpl">${list.map((x, i) => `<li${i ? '' : ' class="main"'}>${i ? '' : '⭐ '}<bdi>${esc(x.name)}</bdi>${i ? '' : ' <span class="small muted">الأساسي</span>'}</li>`).join('')}</ul>`
+  : `<bdi>${esc(list[0].name)}</bdi>`;
 async function loadTopic() {
   const box = document.getElementById('qtopic'), qid = S.qid; if (!box || !qid) return;
   let t = null; try { t = await rpc('question_topic', { p_qid: qid }); } catch (e) { console.warn('question_topic:', e && e.message); return; }
   if (!t || S.qid !== qid || !document.getElementById('qtopic')) return;
   S.topic = t;
-  const cur = t.confirmed, sug = t.suggested;
-  const label = sug ? `${esc(sug.name)} <span class="tag amber">مقترح</span>` : cur ? `${esc(cur.name)} <span class="tag ok">متأكد</span>` : '<span class="muted">لسه مالوش موضوع</span>';
-  const was = sug && cur ? ` <span class="small muted">(المتأكد حاليًا: ${esc(cur.name)})</span>` : '';
-  box.innerHTML = `الموضوع: <b>${label}</b>${was}${t.can_edit && (t.topics || []).length ? ' <button class="linkbtn" type="button" id="qtopic-edit">تغيير</button>' : ''}`;
+  const { conf, sug, list } = topicSets(t);
+  const tag = list.length ? ` <span class="tag ${sug.length ? 'amber' : 'ok'}">${sug.length ? 'مقترح' : 'متأكد'}</span>` : '';
+  const was = sug.length && conf.length ? ` <span class="small muted">(المتأكد حاليًا: ${conf.map(x => `<bdi>${esc(x.name)}</bdi>`).join('، ')})</span>` : '';
+  const edit = t.can_edit ? ' <button class="linkbtn" type="button" id="qtopic-edit">تغيير</button>' : '';
+  box.innerHTML = !list.length ? `الموضوع: <span class="muted">لسه مالوش موضوع</span>${edit}`
+    : list.length > 1 ? `المواضيع (${list.length}):${tag}${edit}${topicNames(list)}${was}`
+    : `الموضوع: <b>${topicNames(list)}</b>${tag}${was}${edit}`;
+  box.classList.toggle('wide', list.length > 1);
   box.hidden = false;
-  const b = document.getElementById('qtopic-edit'); if (b) b.onclick = () => openTopicPicker(qid, t);
+  const b = document.getElementById('qtopic-edit');
+  if (b) b.onclick = () => openTopicPicker(qid, t, { status: S.bundle?.question?.status, onDone: loadTopic });
 }
-function openTopicPicker(qid, t) {
-  const curId = (t.suggested || t.confirmed || {}).id;
-  const approved = S.bundle?.question?.status === 'approved';
+// the picker: tick 1 to 3 topics; with 2 or 3 the reviewer must say which one is the primary (it shows first to students)
+function openTopicPicker(qid, t, opt = {}) {
+  const max = Number(t.max) || 3, topics = (t.topics || []).map(x => ({ id: Number(x.id), name: x.name }));
+  const has = id => topics.some(x => x.id === id);
+  const cur = topicSets(t).list.map(x => Number(x.id)).filter(has);
+  let sel = cur.slice(), prim = cur.length ? cur[0] : null;   // the current primary stays chosen; a brand-new set of 2 or 3 needs a choice
+  const approved = opt.status === 'approved';
   const { sheet, close } = openSheet(`
-    <div class="sheet-head"><h2>🏷️ موضوع السؤال</h2></div>
-    <p class="small muted">مواضيع شابتر ${esc(t.chapter?.name || '')}. ${approved ? 'السؤال معتمد، فاختيارك هيتأكد على طول.' : 'اختيارك هيفضل مقترح، ويتأكد لما السؤال يتعتمد.'}</p>
-    <div class="topic-list" role="radiogroup">${(t.topics || []).map(x => `<label class="topic-opt"><input type="radio" name="tp" value="${Number(x.id)}" ${x.id === curId ? 'checked' : ''}> ${esc(x.name)}</label>`).join('')}</div>
-    <p class="hint">موضوع مش موجود؟ الإدارة تقدر تضيفه من "مواضيع الشابتر" في لوحة الإدارة.</p>
+    <div class="sheet-head"><h2>🏷️ مواضيع السؤال</h2></div>
+    <p class="small muted">مواضيع شابتر <bdi>${esc(t.chapter?.name || '')}</bdi>. علّم من موضوع واحد لـ ${max} مواضيع. ${approved ? 'السؤال معتمد، فاختيارك هيتأكد على طول.' : 'اختيارك هيفضل مقترح، ويتأكد لما السؤال يتعتمد.'}</p>
+    <div class="topic-list" id="tp-list"></div>
+    <p class="hint tp-why" id="tp-why" hidden>⭐ الأساسي هو اللي بيظهر للطالب على شاشة السؤال، والباقي بيظهر بعده. اختار الأساسي من المواضيع اللي علّمت عليها.</p>
+    <div class="tp-new"><button class="linkbtn" type="button" id="tp-new-open" aria-expanded="false">➕ موضوع جديد</button>
+      <div id="tp-new-box" hidden><label class="small" for="tp-new-name">اسم الموضوع الجديد (بالإنجليزي، زي ما في المراجع):</label>
+        <div class="tp-new-row"><input class="t" id="tp-new-name" type="text" dir="ltr" maxlength="80" autocomplete="off" spellcheck="false"><button class="btn sec" type="button" id="tp-new-add">إضافة</button></div>
+        <p class="hint">هيتضاف لمواضيع شابتر <bdi>${esc(t.chapter?.name || '')}</bdi>، ويتعلّم عليه هنا. ولو فيه موضوع بنفس الاسم، هيتعلّم على الموجود من غير تكرار.</p></div></div>
+    <p class="small tp-note" id="tp-note" role="status"></p>
     <div class="err" id="tp-err" role="alert"></div>
     <div class="foot"><button class="btn primary" id="tp-save">حفظ</button></div>`);
-  sheet.querySelector('#tp-save').onclick = async () => {
-    const v = sheet.querySelector('input[name="tp"]:checked'), e = sheet.querySelector('#tp-err'), b = sheet.querySelector('#tp-save');
-    if (!v) { e.textContent = 'اختار موضوع.'; return; }
+  const $ = q => sheet.querySelector(q), list = $('#tp-list'), why = $('#tp-why'), err = $('#tp-err'), note = $('#tp-note');
+  const paint = () => {
+    const multi = sel.length > 1, full = sel.length >= max;
+    list.innerHTML = topics.map(x => { const on = sel.includes(x.id);
+      return `<div class="topic-opt tp-row${on ? ' on' : ''}${on && multi && prim === x.id ? ' prim' : ''}">
+        <label class="tp-pick"><input type="checkbox" value="${x.id}" ${on ? 'checked' : ''} ${!on && full ? 'disabled' : ''}> <bdi>${esc(x.name)}</bdi></label>
+        ${on && multi ? `<label class="tp-star"><input type="radio" name="tp-prim" value="${x.id}" ${prim === x.id ? 'checked' : ''}> ⭐ الأساسي</label>` : ''}</div>`; }).join('')
+      || '<p class="small muted">لسه مفيش مواضيع في الشابتر ده. أضف أول موضوع من تحت.</p>';
+    why.hidden = !multi;
+    why.classList.toggle('need', multi && !sel.includes(prim));
+    note.textContent = note.dataset.keep || (full && topics.length > max ? `وصلت لـ ${max} مواضيع، وده الحد الأقصى. شيل علامة من موضوع عشان تختار غيره.` : '');
+  };
+  list.onchange = ev => {
+    const el = ev.target, id = Number(el.value); err.textContent = ''; note.dataset.keep = '';
+    if (el.type === 'checkbox') {
+      if (el.checked) { if (sel.length < max && !sel.includes(id)) sel.push(id); }
+      else { sel = sel.filter(x => x !== id); if (prim === id) prim = null; }
+    } else if (el.type === 'radio') prim = id;
+    paint();
+  };
+  const box = $('#tp-new-box'), nm = $('#tp-new-name'), opener = $('#tp-new-open'), addB = $('#tp-new-add');
+  opener.onclick = () => { box.hidden = !box.hidden; opener.setAttribute('aria-expanded', String(!box.hidden)); if (!box.hidden) nm.focus(); };
+  addB.onclick = async () => {   // creates the topic under this question's chapter (server checks access, chapter, duplicates and the name); saving stays with "حفظ"
+    const name = nm.value.replace(/\s+/g, ' ').trim(); err.textContent = '';
+    if (!name) { err.textContent = 'اكتب اسم الموضوع.'; nm.focus(); return; }
+    if (name.length < 3 || name.length > 80) { err.textContent = 'اسم الموضوع لازم يكون من 3 لـ 80 حرف.'; nm.focus(); return; }
+    if (!/[A-Za-z]/.test(name)) { err.textContent = 'اكتب اسم الموضوع بالإنجليزي، زي ما في المراجع.'; nm.focus(); return; }
+    addB.disabled = true;
+    try {
+      const r = await rpc('question_topic_create', { p_qid: qid, p_name: name }), id = Number(r.topic_id);
+      if (!has(id)) topics.push({ id, name: r.name });
+      const ticked = sel.includes(id) || sel.length < max;
+      if (!sel.includes(id) && ticked) sel.push(id);
+      nm.value = ''; box.hidden = true; opener.setAttribute('aria-expanded', 'false');
+      note.dataset.keep = `${r.existed ? `الموضوع "${r.name}" موجود قبل كده` : `اتضاف "${r.name}" لمواضيع الشابتر`}${ticked ? '، واتعلّم عليه. اضغط حفظ.' : `. شيل علامة من موضوع عشان تعلّم عليه (${max} بالكتير).`}`;
+      paint(); list.querySelector(`input[value="${id}"]`)?.closest('.tp-row')?.scrollIntoView({ block: 'nearest' });
+    } catch (x) { console.warn('question_topic_create:', x); err.textContent = errText(x); }
+    addB.disabled = false;
+  };
+  nm.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); addB.click(); } };
+  paint();
+  if (!topics.length) opener.click();   // a chapter with no topics yet: the name box is the only way, so it opens at once
+  $('#tp-save').onclick = async () => {
+    const b = $('#tp-save'); err.textContent = '';
+    if (!sel.length) { err.textContent = 'علّم على موضوع واحد على الأقل.'; return; }
+    if (sel.length > 1 && !sel.includes(prim)) { err.textContent = 'حدد الموضوع الأساسي ⭐ الأول.'; why.classList.add('need'); why.scrollIntoView({ block: 'nearest' }); return; }
+    const p = sel.length === 1 ? sel[0] : prim, ids = [p, ...sel.filter(x => x !== p)];
     b.disabled = true;
     try {
-      const r = await rpc('set_question_topic', { p_qid: qid, p_topic_id: Number(v.value) });
-      close(true); notify(r === 'confirmed' ? 'تم تأكيد الموضوع' : r === 'unchanged' ? 'الموضوع زي ما هو' : 'تم حفظ الموضوع المقترح', r === 'suggested' ? 'هيتأكد لما السؤال يتعتمد.' : '');
-      loadTopic();
-    } catch (x) { console.warn('set_question_topic:', x); b.disabled = false; e.textContent = errText(x); }
+      const r = await rpc('set_question_topics', { p_qid: qid, p_topic_ids: ids, p_primary: p });
+      close(true);
+      notify(r === 'confirmed' ? 'تم تأكيد المواضيع بفضل الله' : r === 'unchanged' ? 'المواضيع زي ما هي' : 'تم حفظ المواضيع المقترحة', r === 'suggested' ? 'هتتأكد لما السؤال يتعتمد.' : '');
+      if (opt.onDone) opt.onDone();
+    } catch (x) { console.warn('set_question_topics:', x); b.disabled = false; err.textContent = errText(x); }
   };
 }
 
@@ -942,10 +1019,11 @@ async function renderTopics(chapterId) {
   const groups = d.groups || [], allTopics = groups.map(g => ({ id: g.topic_id, name: g.name }));
   const qrow = (q, tid) => `<li class="tq"><a href="#q/${Number(q.qid)}">${esc(q.qid_display)}</a> <span class="small muted">${esc(STATUS_AR[q.status] || q.status)}</span>
       ${q.state ? `<span class="tag ${q.state === 'confirmed' ? 'ok' : 'amber'}">${q.state === 'confirmed' ? 'متأكد' : 'مقترح'}</span>` : ''}
+      ${Number(q.n) > 1 ? `<span class="tag">${q.main ? '⭐ أساسي' : 'إضافي'} · ${Number(q.n)} مواضيع</span>` : ''}
       <div class="small" dir="auto">${esc(q.stem || '')}…</div>
-      <button class="linkbtn" type="button" data-move="${Number(q.qid)}" data-from="${tid || ''}">${tid ? 'نقل لموضوع تاني' : 'حدد موضوع'}</button></li>`;
+      <button class="linkbtn" type="button" data-move="${Number(q.qid)}" data-st="${esc(q.status || '')}">${tid ? 'تعديل المواضيع' : 'حدد موضوع'}</button></li>`;
   $app.innerHTML = head + `<main class="wrap">
-    <p class="small muted">الأسئلة متجمعة تحت مواضيعها. "مقترح" = محادثة التصنيف أو مراجع اختاره ولسه ماتأكدش؛ والاعتماد بيأكده لوحده. والمتأكد بس هو اللي بيوصل للطلاب.</p>
+    <p class="small muted">الأسئلة متجمعة تحت مواضيعها، والسؤال اللي ليه أكتر من موضوع بيظهر تحت كل مواضيعه، و⭐ على الأساسي. "مقترح" = محادثة التصنيف أو مراجع اختاره ولسه ماتأكدش؛ والاعتماد بيأكده لوحده. والمتأكد بس هو اللي بيوصل للطلاب.</p>
     <div class="row"><button class="btn sec" id="tp-add">➕ موضوع جديد</button></div>
     ${groups.map(g => { const sug = g.questions.filter(q => q.state === 'suggested');
       return `<details class="tgroup" ${sug.length ? 'open' : ''}><summary><b>${esc(g.name)}</b> <span class="small muted">${g.questions.length} سؤال${sug.length ? ` · ${sug.length} مقترح` : ''}</span></summary>
@@ -962,7 +1040,7 @@ async function renderTopics(chapterId) {
   };
   $app.querySelectorAll('[data-confirm]').forEach(b => b.onclick = async () => {
     const g = groups.find(x => x.topic_id === Number(b.dataset.confirm)); const qids = g.questions.filter(q => q.state === 'suggested').map(q => q.qid);
-    if (!confirm(`تأكيد موضوع "${g.name}" لـ ${qids.length} سؤال؟`)) return;
+    if (!confirm(`تأكيد المواضيع المقترحة لـ ${qids.length} سؤال؟\nبيتأكد كل مواضيع السؤال المقترحة، مش "${g.name}" بس.`)) return;
     b.disabled = true;
     try { const n = await rpc('confirm_topics', { p_qids: qids }); notify(`اتأكد ${n} سؤال`, ''); reload(); } catch (e) { b.disabled = false; notify('ماتأكدش', errText(e), 'info'); }
   });
@@ -973,16 +1051,15 @@ async function renderTopics(chapterId) {
   $app.querySelectorAll('[data-merge]').forEach(b => b.onclick = () => {
     const g = groups.find(x => x.topic_id === Number(b.dataset.merge)); const others = allTopics.filter(x => x.id !== g.topic_id);
     pickTopic(`دمج "${g.name}" في:`, others, async id => {
-      if (!confirm(`كل أسئلة "${g.name}" هتتنقل للموضوع المختار، و"${g.name}" هيتمسح. تكمّل؟`)) return false;
+      if (!confirm(`كل أسئلة "${g.name}" هتتنقل للموضوع المختار (ولو السؤال فيه الاتنين، بيفضل مرة واحدة)، و"${g.name}" هيتمسح. تكمّل؟`)) return false;
       await rpc('topic_merge', { p_from: g.topic_id, p_into: id }); reload(); return true;
     });
   });
-  $app.querySelectorAll('[data-move]').forEach(b => b.onclick = () => {
-    const from = Number(b.dataset.from) || null;
-    pickTopic('اختار الموضوع:', allTopics.filter(x => x.id !== from), async id => {
-      const r = await rpc('set_question_topic', { p_qid: Number(b.dataset.move), p_topic_id: id });
-      notify(r === 'confirmed' ? 'اتنقل واتأكد' : 'اتنقل كمقترح', r === 'suggested' ? 'هيتأكد لما السؤال يتعتمد.' : ''); reload(); return true;
-    });
+  $app.querySelectorAll('[data-move]').forEach(b => b.onclick = async () => {   // 5.6: the same picker as the question page
+    b.disabled = true;
+    try { const t = await rpc('question_topic', { p_qid: Number(b.dataset.move) }); if (t) openTopicPicker(Number(b.dataset.move), t, { status: b.dataset.st, onDone: reload }); }
+    catch (e) { notify('مافتحش', errText(e), 'info'); }
+    b.disabled = false;
   });
   scrollTo(0, 0);
 }
@@ -2298,6 +2375,7 @@ function openUndo() {
       ${p ? card('previous', '↩️', 'العودة للوضع السابق', p[1], p[0]) : ''}
       ${u.original ? card('original', '⟲', 'العودة للسؤال بدون أي تعديلات', `يرجع لنسخة Claude الأصلية اللي دخلت المراجعة (النسخة ${esc(u.baseline_version_no || '')})، ويلغي طلبك المفتوح لو فيه.${approvedNote}`, 'كل التعديلات تتلغي') : ''}
     </div>
+    ${u.original ? '' : '<p class="hint u-none">الرجوع للأصل: السؤال لسه على نسخة Claude الأصلية، ومفيش تعديلات يرجع منها.</p>'}
     <div class="err" id="u-err" role="alert"></div>
     <div class="foot"><button class="btn ok" id="u-go" disabled>✓ تأكيد الرجوع</button><button class="btn" id="u-cancel" type="button">إغلاق</button></div>`);
   let mode = null;
