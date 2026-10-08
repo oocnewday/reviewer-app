@@ -647,3 +647,76 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .cs-track.t>i{background:var(--ok)}
 .cs-act{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}
 .cs-act .linkbtn{min-height:36px}
+/* 5.9 (owner 8/10): "📚 الشابتر" above the folders – same-size choices in one row, then where the chapter stands */
+.scard{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px 10px;margin:0 0 14px}
+.sc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px}
+.sc-head h2{margin:0;font-size:1rem}
+.sc-head .linkbtn{min-height:36px}
+.scopes{display:flex;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;padding:2px 1px 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.scopes::-webkit-scrollbar{display:none}
+.scopes.more-e{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 28px),transparent)}
+.scopes.more-s{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}
+.scopes.more-s.more-e{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to left,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+.scope{flex:0 0 128px;width:128px;min-height:58px;scroll-snap-align:start;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--paper);color:inherit;font:inherit;text-align:start;cursor:pointer;min-width:0}
+.scope .sc-l{display:block;max-width:100%;font-weight:700;font-size:.9rem;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scope .sc-n{font-size:.76rem;color:var(--ink-3);line-height:1.3}
+.scope[aria-pressed="true"]{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+.scope[aria-pressed="true"] .sc-n{color:inherit;opacity:.8}
+@media (prefers-color-scheme:dark){.scope[aria-pressed="true"]{color:#0E1426}}
+.sc-prog{display:grid;gap:0;margin-top:2px}
+.sc-done{margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--ok-2);color:var(--ok);font-weight:700;font-size:.9rem;line-height:1.6}
+/* the folders: every tile the same height (two lines of name), a header line per group */
+.ftile{min-height:3.5rem}
+.fg-h{display:flex;align-items:center;gap:8px;margin:10px 2px 5px}
+.fg-h::after{content:'';flex:1;height:1px;background:var(--line-2)}
+.fgrid>.fg-h:first-child{margin-top:2px}
+/* the admin chapter card: two bars in the summary, round marks for the steps, buttons in a same-width grid */
+.staff .chap-bars{display:grid;margin-top:6px;max-width:560px}
+.staff .chap-bars .cs-bar{font-size:.8rem;margin:2px 0}
+.staff .chstep{display:flex;flex-wrap:nowrap;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--line-2);border-inline-start-width:1px;border-radius:12px;margin:6px 0;background:var(--surface)}
+.staff .chstep.rec{border-color:var(--cobalt);background:var(--cobalt-2);padding:10px}
+.staff .chstep .grow{flex:1;min-width:0}
+.staff .st-ic{flex:0 0 26px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:.8rem;font-weight:700;background:var(--line-2);color:var(--ink-3);margin-top:1px}
+.staff .chstep.work .st-ic{background:var(--cobalt);color:#fff}
+@media (prefers-color-scheme:dark){.staff .chstep.work .st-ic{color:#0E1426}}
+.staff .chstep.ok .st-ic{background:var(--ok-2);color:var(--ok)}
+.staff .st-t{line-height:1.6}
+.staff .st-btns{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:8px}
+.staff .st-btns .btn{width:100%;min-height:42px!important;padding:8px 10px;font-size:.88rem!important;line-height:1.3;text-align:center;white-space:normal}
+.staff .chap-done>summary{color:var(--ok)}
+/* 5.9: the bars of one block share their columns, so every track starts and ends at the same place */
+.cs-bars,.sc-prog,.staff .chap-bars{display:grid;grid-template-columns:auto 1fr auto;column-gap:10px;row-gap:8px;align-items:center;margin:6px 0 2px}
+.cs-bars>.cs-bar,.sc-prog>.cs-bar,.staff .chap-bars>.cs-bar{display:contents}
+.staff .chap-bars{font-size:.8rem}
+/* main actions take the whole row, the chapter links two per row (a long name ends with … and shows whole on hold) */
+.staff .st-btns{grid-template-columns:repeat(auto-fill,minmax(118px,1fr));max-width:560px}
+.staff .st-btns .btn:not(.small){grid-column:1/-1}
+.staff .st-btns .btn.small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:26px}
+/* chapter links: the whole name, on two lines when long, every button in a row the same height */
+.staff .st-btns .btn.small{display:flex;align-items:center;justify-content:center;white-space:normal;overflow:visible;line-height:1.3;min-height:48px!important;overflow-wrap:anywhere}
+.scope .sc-l{text-align:right}
+.staff .st-btns .btn.small{font-size:.8rem!important;padding:6px 8px;min-height:3.6em!important;overflow-wrap:break-word}
+/* 5.9 (owner 8/10): where each chapter stands from the upload on – one mark per step, the same marks as the steps inside.
+   Only the step for now is filled; steps with work after it are outlined; ✓ green when done; grey while waiting. */
+.staff .trk{list-style:none;margin:8px 0 4px;padding:0;display:flex;align-items:center;max-width:420px}
+.staff .trk li{display:flex;align-items:center;flex:1 1 0;min-width:0}
+.staff .trk li:first-child{flex:0 0 auto}
+.staff .trk li::before{content:'';flex:1 1 auto;min-width:3px;height:2px;margin:0 2px;border-radius:2px;background:var(--line)}
+.staff .trk li:first-child::before{display:none}
+.staff .trk li.ok::before{background:var(--ok)}
+.staff .trk b{flex:0 0 auto;width:clamp(18px,1.375rem,7vw);height:clamp(18px,1.375rem,7vw);border-radius:50%;display:grid;place-items:center;font-size:.7rem;font-weight:700;line-height:1;border:1.5px solid var(--line);background:var(--surface);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.staff .trk .ok b{background:var(--ok-2);border-color:var(--ok-2);color:var(--ok)}
+.staff .trk .now b{background:var(--cobalt);border-color:var(--cobalt);color:#fff;box-shadow:0 0 0 3px var(--cobalt-2)}
+.staff .trk .next b{border-color:var(--cobalt);color:var(--cobalt)}
+.staff .chap-sum .left{color:var(--ink-2)}
+.staff .chap-sum .left-h{font-weight:600}
+/* the steps inside: the same three looks */
+.staff .chstep.work .st-ic{background:var(--surface);color:var(--cobalt);box-shadow:inset 0 0 0 1.5px var(--cobalt)}
+.staff .chstep.now .st-ic{background:var(--cobalt);color:#fff;box-shadow:none}
+.staff .chstep.wait .st-ic{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--line)}
+@media (prefers-color-scheme:dark){.staff .trk .now b,.staff .chstep.now .st-ic{color:#0E1426}}
+.staff .chap-sum .li{white-space:nowrap;color:var(--ink-2)}
+.staff .chap-sum .sep{color:var(--ink-3)}
+.staff .chap-sum .tag.now{font-weight:700;font-size:.8rem}
+.staff .chstep.now .tag.cobalt{background:var(--cobalt);color:#fff}
+@media (prefers-color-scheme:dark){.staff .chstep.now .tag.cobalt{color:#0E1426}}

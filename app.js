@@ -14,7 +14,7 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.8';
+const APP_VERSION = '5.9';
 const APP_BUILD = '8/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -386,6 +386,8 @@ const FOLDERS = [
   { id: 'alerts', label: 'فيها تنبيه ⚠️', test: r => !!(r.alert_kinds && r.alert_kinds.length) },   // 3.9: "⚠️ للمراجع" block (backlog 24); kept before 'all' so navigation inside folders is unchanged
   { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the tile always shows (5.5)
   { id: 'topicre', label: 'مواضيع تتراجع 🏷️', test: r => !!(S.topicR && S.topicR.has(r.qid)) },   // 5.7 (migration 062): edited after the topics were confirmed
+  { id: 'notappr', label: 'لم تُعتمد', test: r => r.status !== 'approved' },   // 5.9 (owner 8/10): what is still missing in the chosen chapter
+  { id: 'untopic', label: 'لم تُصنّف 🏷️', test: r => !!(S.topicC && !S.topicC.has(r.qid)) },   // topics not confirmed yet (students see confirmed ones only)
   { id: 'all', label: 'الكل', test: () => true },
 ];
 const SORTS = { priority: 'الأولوية (المختلف والأقل ثقة أولًا)', id_asc: 'رقم السؤال: تصاعدي', id_desc: 'رقم السؤال: تنازلي', conf_low: 'الثقة: الأقل أولًا', conf_high: 'الثقة: الأعلى أولًا' };
@@ -408,7 +410,13 @@ const isHidden = r => String(r.student_state || '').startsWith('hidden_');
 const HIDDEN_SHORT = { hidden_disagree: 'اختلاف مع المصدر', hidden_low_confidence: 'ثقة منخفضة', hidden_incomplete: 'ناقص', hidden_completed: 'اختياراته من المراجع', hidden_no_source: 'المصدر من غير إجابة', hidden_answer_fix: 'لحد تصليح الإجابة', hidden_admin: 'بقرار الإدارة', hidden_archived: 'مؤرشف' };
 const hiddenLabel = k => HIDDEN_SHORT[k] || String(k).replace(/^hidden_/, '').replace(/_/g, ' ');
 function countBy(rows, key) { const o = {}; for (const r of rows) { const k = key(r); o[k] = (o[k] || 0) + 1; } return o; }
-function chapterList() { return [...new Set(S.rows.filter(r => r.chapter && VISIBLE_STATES.has(r.student_state)).map(r => r.chapter))].sort((a, b) => a.localeCompare(b)); }
+// 5.9 (owner 8/10): the chapter is a scope picked at the top of the home page (every chapter in the list, biggest first);
+// folder counts and lists follow it, and "مسح الكل" keeps it
+function chapterList() { const n = countBy(S.rows.filter(r => r.chapter), r => r.chapter); return Object.keys(n).sort((a, b) => n[b] - n[a] || a.localeCompare(b)); }
+const inScope = (rows, v = S.view) => !v || !v.chapter || v.chapter === 'all' ? rows : rows.filter(r => r.chapter === v.chapter);
+// one labelled progress bar (chapter card, summary sheet, admin chapter card)
+const pctOf = (a, b) => b ? Math.round(a * 100 / b) : 0;
+const progBar = (label, a, b, cls) => `<div class="cs-bar"><span class="cs-l">${label}</span><span class="cs-track ${cls}" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="${b}" aria-valuenow="${a}"><i style="width:${pctOf(a, b)}%"></i></span><span class="cs-n">${a} من ${b}</span></div>`;
 function hiddenKinds() {
   const order = Object.keys(STUDENT_STATE), rank = k => { const i = order.indexOf(k); return i < 0 ? 999 : i; };
   return [...new Set(S.rows.filter(isHidden).map(r => r.student_state))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
@@ -436,14 +444,30 @@ function applyFilters(rows, view, skip) {
 }
 /* 5.3: the folders as a grid in three groups (every folder visible, same-size tiles; a folder with work for you gets a
    coloured count), and the filters as sections, each with one line saying exactly what it brings back. */
-const FOLDER_GROUPS = [['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes', 'topicre']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
-const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups', 'topicre']);
+const FOLDER_GROUPS = [['📌 الناقص', ['notappr', 'untopic']], ['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes', 'topicre']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
+const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups', 'topicre', 'notappr', 'untopic']);
 const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات الطلاب' };   // shorter on the tile; the list title keeps the full name
 function folderGrid(v, counts) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
   return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, ids]) => {
-    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (f.id !== 'topicre' || S.topicR));   // 5.7: no tile before migration 062
+    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (f.id !== 'topicre' || S.topicR) && (f.id !== 'untopic' || S.topicC));   // 5.7: no tile before migration 062
     return tiles.length ? `<div class="fg-h">${title}</div><div class="fg">${tiles.map(f => `<button class="ftile${counts[f.id] ? '' : ' zero'}${HOT.has(f.id) && counts[f.id] ? ' hot' : ''}" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}"><span class="ft-l">${TILE_LABEL[f.id] || f.label}</span><span class="ft-n">${counts[f.id]}</span></button>`).join('')}</div>` : '';
   }).join('')}</nav>`;
+}
+/* 5.9 (owner 8/10): "📚 الشابتر" above the folders: same-size choices (the long name ends with … and shows whole on hold),
+   then where the chosen chapter stands: approved and confirmed topics, and a green line once both are full. */
+function scopeCard(v) {
+  const chs = chapterList(); if (!chs.length) return '';
+  const n = countBy(S.rows, r => r.chapter), cur = chs.includes(v.chapter) ? v.chapter : 'all';
+  const rows = inScope(S.rows, { chapter: cur }), total = rows.length, appr = rows.filter(r => r.status === 'approved').length;
+  const conf = S.topicC ? rows.filter(r => S.topicC.has(r.qid)).length : null, re = S.topicR ? rows.filter(r => S.topicR.has(r.qid)).length : 0;
+  const done = total > 0 && appr === total && (conf === null || conf === total) && !re;
+  const chip = (k, label, cnt) => `<button class="scope" type="button" data-scope="${esc(k)}" aria-pressed="${cur === k}" title="${esc(label)}"><span class="sc-l" dir="auto">${esc(label)}</span><span class="sc-n">${cnt} سؤال</span></button>`;
+  return `<section class="scard" aria-label="الشابتر">
+    <div class="sc-head"><h2>📚 الشابتر</h2><button class="linkbtn small" type="button" id="chsum">📊 كل الشباتر</button></div>
+    <div class="scopes" id="scopes" role="group" aria-label="اختار الشابتر">${chip('all', 'الكل', S.rows.length)}${chs.map(c => chip(c, c, n[c])).join('')}</div>
+    <div class="sc-prog">${progBar('الاعتماد', appr, total, 'a')}${conf === null ? '' : progBar('المواضيع', conf, total, 't')}</div>
+    ${done ? `<div class="sc-done">✅ ${cur === 'all' ? 'كل الشباتر اكتملت' : 'الشابتر اكتمل'} بفضل الله: الأسئلة كلها معتمدة، ومواضيعها متأكدة.</div>` : ''}
+  </section>`;
 }
 // 5.6 (owner 7/10): a line under "🔍 تصفية" says what it holds, until the reviewer opens it once or closes the line (per device)
 const FHINT_KEY = 'ooc-review-fhint';
@@ -480,7 +504,6 @@ function activeLine(v) {
   const it = [];
   const x = (label, patch) => it.push(`<button class="achip" type="button" data-unset='${esc(JSON.stringify(patch))}' aria-label="شيل ${esc(label)}">${esc(label)} ✕</button>`);
   if (v.conf !== 'all') x(`ثقة ${({ high: 'عالية', medium: 'متوسطة', low: 'منخفضة' })[v.conf] || v.conf}`, { conf: 'all' });
-  if (v.chapter !== 'all') x(v.chapter, { chapter: 'all' });
   if (v.disagree) x('كل المختلف', { disagree: false });
   if (v.incomplete) x('كل الناقص', { incomplete: false });
   if (S.topicC && v.topic && v.topic !== 'all') x(v.topic === 'suggested' ? 'موضوع مقترح' : v.topic === 'none' ? 'مالوش موضوع' : v.topic === 'confirmed' ? 'مواضيعه متأكدة' : 'منتظر التصنيف', { topic: 'all' });
@@ -489,10 +512,8 @@ function activeLine(v) {
 }
 function facetHTML(v) {
   const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
-  const chRows = applyFilters(inFolder, v, 'chapter'), chN = countBy(chRows, r => r.chapter), chapters = chapterList();
   const chip = (attr, k, label, n, on) => `<button class="chip" aria-pressed="${on}" ${attr}="${esc(k)}"><bdi>${esc(label)}</bdi><span class="n">${n}</span></button>`;
-  const ch = chapters.length ? `<div class="fsec"><div class="fsec-h">📚 الشابتر</div><p class="fhelp">الشباتر اللي فيها أسئلة ظاهرة للطلاب، والعدد جوه الفولدر ده.</p>
-      <div class="chips" style="padding-bottom:4px" aria-label="الشابتر">${chip('data-chapter', 'all', 'الكل', chRows.length, v.chapter === 'all')}${chapters.map(c => chip('data-chapter', c, c, chN[c] || 0, v.chapter === c)).join('')}</div></div>` : '';
+  const ch = '';   // 5.9: the chapter is chosen in "📚 الشابتر" above the folders
   let hid = '';
   if (v.hidden) {
     const hRows = applyFilters(inFolder, v, 'hidden').filter(isHidden), hN = countBy(hRows, r => r.student_state), hk = v.hiddenKind || 'all';
@@ -502,7 +523,7 @@ function facetHTML(v) {
   return { ch, hid };
 }
 function listFor(view = S.view) {
-  if (view.folder === 'rebuild') return [...(S.rebuild || [])];   // already ordered by number; sorting and filters do not apply
+  if (view.folder === 'rebuild') return inScope([...(S.rebuild || [])], view);   // already ordered by number; sorting and filters do not apply (5.9: the chapter does)
   const f = FOLDERS.find(x => x.id === view.folder) || FOLDERS[0];
   let rows = applyFilters(S.rows.filter(f.test), view);
   const cr = r => CONF_RANK[r.ai_confidence] ?? 1;
@@ -631,13 +652,29 @@ function reasonTags(r, showStatus) {
   else if (r.open_requests) t.push('<span class="tag amber">طلب من مراجع آخر</span>');
   return t.join('');
 }
+// 5.9: a line above the list of the two "missing" folders and of "مواضيع تتراجع", and what an empty one says
+const FOLDER_LEAD = {
+  notappr: 'أسئلة لسه ماتعتمدتش، أيًا كانت حالتها: مستنية مراجعة، أو تعديل، أو اعتماد بعد التعديل.',
+  untopic: 'أسئلة مواضيعها لسه ماتأكدتش، والطلاب مابيشوفوش غير المتأكد. افتح السؤال واضغط "✓ تأكيد" لو المواضيع مناسبة، أو "تغيير".',
+  topicre: 'أسئلة اتعدّلت بعد ما مواضيعها اتأكدت. افتح كل سؤال وشوف مواضيعه لسه مناسبة ولا محتاجة تتغير.',
+};
+const FOLDER_EMPTY = { notappr: 'كل الأسئلة هنا معتمدة بفضل الله.', untopic: 'كل الأسئلة هنا مواضيعها متأكدة بفضل الله.', topicre: 'مفيش أسئلة مواضيعها محتاجة مراجعة.' };
+// the chosen chapter stays in sight in its row, and the row fades at the side that has more (5.9)
+function centerScope() {
+  const sc = document.getElementById('scopes'); if (!sc) return;
+  const on = sc.querySelector('[aria-pressed="true"]');
+  if (on) { const a = sc.getBoundingClientRect(), b = on.getBoundingClientRect(); if (b.left < a.left || b.right > a.right) sc.scrollLeft += (b.left + b.width / 2) - (a.left + a.width / 2); }
+  const edge = () => { const max = sc.scrollWidth - sc.clientWidth, x = Math.abs(sc.scrollLeft); sc.classList.toggle('more-s', x > 2); sc.classList.toggle('more-e', x < max - 2); };
+  edge(); sc.addEventListener('scroll', edge, { passive: true });
+}
 function renderQueue() {
   S.bundle = null; S.qid = null; S.navHold = null; closeSheets();
   const v = S.view, list = listFor();
-  const counts = Object.fromEntries(FOLDERS.map(f => [f.id, S.rows.filter(f.test).length]));
-  counts.rebuild = (S.rebuild || []).length;
+  const scoped = inScope(S.rows);   // 5.9: counts follow the chosen chapter
+  const counts = Object.fromEntries(FOLDERS.map(f => [f.id, scoped.filter(f.test).length]));
+  counts.rebuild = inScope(S.rebuild || []).length;
   const isRb = v.folder === 'rebuild';
-  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + (v.chapter !== 'all') + !!v.hidden + (!!S.topicC && (v.topic || 'all') !== 'all');
+  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + !!v.hidden + (!!S.topicC && (v.topic || 'all') !== 'all');
   const fx = !isRb && v.showFilters ? facetHTML(v) : { ch: '', hid: '' };
   const shown = list.slice(0, S.listLimit || 60);
   const items = isRb ? shown.map(rbItem).join('') : shown.map(r => `<li><a href="#q/${r.qid}">
@@ -648,21 +685,21 @@ function renderQueue() {
   <main class="wrap">
     ${staffCard()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
-    ${S.topicC && S.rows.some(r => r.chapter) ? '<button class="feed-btn" type="button" id="chsum"><span aria-hidden="true">📊</span> ملخص الشباتر <span class="feed-sub">الاعتماد والمواضيع لكل شابتر</span></button>' : ''}
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
+    ${scopeCard(v)}
     ${folderGrid(v, counts)}
-    ${v.folder === 'topicre' ? `<p class="hint rb-lead">أسئلة اتعدّلت بعد ما مواضيعها اتأكدت. افتح كل سؤال وشوف مواضيعه لسه مناسبة ولا محتاجة تتغير.</p>` : ''}
+    ${FOLDER_LEAD[v.folder] ? `<p class="hint rb-lead">${FOLDER_LEAD[v.folder]}</p>` : ''}
     ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn${activeFilters ? ' f-on' : ''}" id="tog-f" aria-expanded="${v.showFilters}">🔍 تصفية${activeFilters ? ` (${activeFilters})` : ''} <span aria-hidden="true">${v.showFilters ? '▴' : '▾'}</span></button>
     </div>
-    ${!v.showFilters && !fhintDone() ? `<p class="hint fhint" id="fhint"><span>🔍 <b>تصفية</b>: اختار الأسئلة حسب الشابتر، أو ثقة Claude، أو الاختلاف مع المصدر، أو منتظر التصنيف.</span><button class="linkbtn quiet" type="button" id="fhint-x" aria-label="إخفاء الشرح">✕</button></p>` : ''}
+    ${!v.showFilters && !fhintDone() ? `<p class="hint fhint" id="fhint"><span>🔍 <b>تصفية</b>: جوّه الشابتر اللي فوق، اختار حسب ثقة Claude، أو الاختلاف مع المصدر، أو المخفي، أو حالة الموضوع.</span><button class="linkbtn quiet" type="button" id="fhint-x" aria-label="إخفاء الشرح">✕</button></p>` : ''}
     ${v.showFilters ? filtersPanel(v, fx) : ''}`}
     ${activeFilters ? activeLine(v) : ''}
     <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
-      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : v.folder === 'topicre' && !activeFilters ? 'مفيش أسئلة مواضيعها محتاجة مراجعة.' : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
+      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : !activeFilters && FOLDER_EMPTY[v.folder] ? FOLDER_EMPTY[v.folder] : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
     ${installListCard()}
     ${appFooter()}
   </main>`;
@@ -682,7 +719,9 @@ function renderQueue() {
   const fh = document.getElementById('f-hid'); if (fh) fh.onclick = () => set({ hidden: !v.hidden, hiddenKind: 'all' });
   $app.querySelectorAll('[data-chapter]').forEach(b => b.onclick = () => set({ chapter: b.dataset.chapter }));
   $app.querySelectorAll('[data-hkind]').forEach(b => b.onclick = () => set({ hiddenKind: b.dataset.hkind === v.hiddenKind ? 'all' : b.dataset.hkind }));   // 5.3: tap again = all hidden
-  const fc = document.getElementById('f-clear'); if (fc) fc.onclick = () => set({ ...NO_FILTERS });
+  const fc = document.getElementById('f-clear'); if (fc) fc.onclick = () => set({ ...NO_FILTERS, chapter: v.chapter });   // 5.9: the chapter stays
+  $app.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => set({ chapter: b.dataset.scope }));
+  centerScope();
   $app.querySelectorAll('[data-topic]').forEach(b => b.onclick = () => set({ topic: b.dataset.topic === v.topic && b.dataset.topic !== 'pending' ? 'pending' : b.dataset.topic === v.topic ? 'all' : b.dataset.topic }));
   $app.querySelectorAll('[data-unset]').forEach(b => b.onclick = () => set(JSON.parse(b.dataset.unset)));
   document.getElementById('goto').onsubmit = ev => {
@@ -2622,13 +2661,12 @@ function goTopics(topic, ch) {
   const h = document.querySelector('.aline') || document.querySelector('.qhead'); if (h) h.scrollIntoView({ block: 'start' });
 }
 function openChapterSummary() {
-  const pct = (a, b) => b ? Math.round(a * 100 / b) : 0;
-  const bar = (label, a, b, cls) => `<div class="cs-bar"><span class="cs-l">${label}</span><span class="cs-track ${cls}" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="${b}" aria-valuenow="${a}"><i style="width:${pct(a, b)}%"></i></span><span class="cs-n">${a} من ${b}</span></div>`;
+  const bar = progBar;
   const rows = chapterSummary().map(g => {
     const done = g.approved === g.total && g.conf === g.total && !g.re, wait = g.total - g.conf;
     return `<div class="cs-row${done ? ' done' : ''}">
       <div class="cs-h"><b><bdi>${esc(g.name)}</bdi></b> <span class="small muted">${g.total} سؤال</span>${done ? ' <span class="tag ok">✅ اكتمل بفضل الله</span>' : ''}</div>
-      ${bar('الاعتماد', g.approved, g.total, 'a')}${bar('المواضيع', g.conf, g.total, 't')}
+      <div class="cs-bars">${bar('الاعتماد', g.approved, g.total, 'a')}${bar('المواضيع', g.conf, g.total, 't')}</div>
       <div class="cs-act">${wait ? `<button class="linkbtn" type="button" data-cs="pending" data-ch="${esc(g.name)}">مستني تأكيد (${wait})</button>` : ''}${g.conf ? `<button class="linkbtn" type="button" data-cs="confirmed" data-ch="${esc(g.name)}">المتأكدة (${g.conf})</button>` : ''}${g.re ? `<button class="linkbtn" type="button" data-cs="topicre">في "مواضيع تتراجع" (${g.re})</button>` : ''}</div>
     </div>`;
   }).join('');
@@ -2689,7 +2727,8 @@ function chapRecheck(c) {
   const names = new Set((c.chapters || []).map(x => x.name));
   return S.rows.filter(r => S.topicR.has(r.qid) && names.has(r.chapter)).length;
 }
-function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0 || (n('total') > 0 && topicLeft(c) + chapRecheck(c) > 0); }
+// 5.9: page images still missing count as work too (step 1 from the upload on)
+function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('page_count') > n('pages_done') || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0 || (n('total') > 0 && topicLeft(c) + chapRecheck(c) > 0); }
 const chapDone = c => Number(c.total) > 0 && Number(c.approved) === Number(c.total) && !chapWork(c);
 function chapterCardsHTML(list) {
   const sorted = list.slice().sort((a, b) => (chapWork(b) - chapWork(a)) || (Number(b.run_id) - Number(a.run_id)));
@@ -2703,54 +2742,72 @@ function chapterCard(c) {
   const solveN = n('unsolved') + n('awaiting_reason'), revN = n('open_requests') + n('consistency_checks'), reviewN = n('in_review') + n('revised');
   if (b) { S.copyMsgs[`x${key}`] = msgExtract(b, c.file_name || ''); S.copyMsgs[`s${key}`] = msgSolveBatch(b); }
   const chats = Math.ceil(n('unsolved') / 15);
+  const pagesLeft = Math.max(0, n('page_count') - n('pages_done'));
+  // 5.9: each step also says what is left in it (a count, or true for a step with no count); the summary lists them in order
   const steps = [
-    { id: 'extract', name: 'استخراج', work: !!b && n('total') === 0,
+    ...(b || n('page_count') ? [{ id: 'pages', name: 'صور الصفحات', work: pagesLeft > 0, left: pagesLeft,
+      text: !n('page_count') ? 'مفيش صور صفحات مسجّلة' : pagesLeft ? `${n('pages_done')} من ${n('page_count')} صفحة` : `${n('page_count')} صفحة جاهزة`,
+      btn: pagesLeft && b ? `<button class="btn primary" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '' }] : []),
+    { id: 'extract', name: 'استخراج', work: !!b && n('total') === 0, left: !!b && n('total') === 0,
       text: n('total') ? `${n('total')} سؤال` : 'لسه مفيش أسئلة',
       btn: b ? `<button class="btn${n('total') ? ' sec' : ' primary'}" data-copy="x${key}">انسخ رسالة الاستخراج</button>` : '' },
-    { id: 'solve', name: 'حل', work: solveN > 0,
+    { id: 'solve', name: 'حل', work: solveN > 0, left: solveN,
       text: solveN ? `${n('unsolved')} ينتظر الحل${n('unsolved') ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'})` : ''}${n('awaiting_reason') ? `، و${n('awaiting_reason')} ينتظر سبب الاختلاف` : ''}` : 'مفيش أسئلة تنتظر الحل',
       btn: solveN ? `<button class="btn primary" data-copy="${b ? `s${key}` : 'solve'}">انسخ رسالة الحل</button>${OPEN_CLAUDE}` : '' },
     ...(c.topics_confirmed === undefined ? [] : [(() => {
       const none = Math.max(0, n('total') - n('topics_confirmed') - n('topics_suggested'));
       const sug = n('topics_suggested'), pc = n('topics_pending_change'), re = chapRecheck(c), wait = sug + none;
       S.copyMsgs[`t${key}`] = msgTopics(c);
-      const chs = (c.chapters || []).map(x => `<a class="btn sec small" href="#topics/${Number(x.id)}">🏷️ ${esc(x.name)} (${Number(x.n)})</a>`).join('');
+      const chs = (c.chapters || []).map(x => `<a class="btn sec small" href="#topics/${Number(x.id)}" title="${esc(x.name)} (${Number(x.n)})">🏷️ ${esc(x.name)} (${Number(x.n)})</a>`).join('');
       // 5.8: suggested topics wait for a reviewer's confirmation; the step is suggested once the review and the revisions are done
-      return { id: 'topics', name: 'مواضيع', work: n('total') > 0 && solveN === 0 && (none > 0 || (sug + pc + re > 0 && reviewN === 0 && revN === 0)),
+      const work = n('total') > 0 && solveN === 0 && (none > 0 || (sug + pc + re > 0 && reviewN === 0 && revN === 0)), left = n('total') ? topicLeft(c) + re : 0;
+      return { id: 'topics', name: 'مواضيع', work, left,
+        wait: !work && left ? (solveN ? 'بعد الحل' : reviewN || revN ? 'بعد المراجعة والتعديلات' : '') : '',
         text: n('total') ? [`${n('topics_confirmed')} متأكد من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '',
           pc ? `${pc} متأكد وعليه اقتراح زيادة` : '', re ? `${re} في "مواضيع تتراجع"` : ''].filter(Boolean).join(' · ') : 'بعد الاستخراج والحل',
         btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${wait ? `<button class="btn${none ? ' sec' : ' primary'}" type="button" data-gotopic="pending">افتح المستني (${wait})</button>` : ''}${re ? '<button class="btn sec" type="button" data-gofolder="topicre">افتح "مواضيع تتراجع"</button>' : ''}${chs}` : '' };
     })()]),
-    { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0,
+    { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0, left: n('awaiting_rebuild'),
       text: n('awaiting_rebuild') ? `${n('awaiting_rebuild')} ينتظر إعادة التركيب` : 'لا شيء',
       btn: n('awaiting_rebuild') ? '<button class="btn sec" data-gofolder="rebuild">افتح الفولدر</button>' : '' },
-    { id: 'review', name: 'مراجعة', work: reviewN > 0,
+    { id: 'review', name: 'مراجعة', work: reviewN > 0, left: reviewN,
       text: reviewN ? `${reviewN} ينتظر المراجعة` : 'لا شيء',
       btn: reviewN ? '<button class="btn sec" data-gofolder="todo">افتح الفولدر</button>' : '' },
-    { id: 'revise', name: 'تعديلات', work: revN > 0,
+    { id: 'revise', name: 'تعديلات', work: revN > 0, left: revN,
       text: revN ? `${n('open_requests')} طلب تعديل مفتوح${n('consistency_checks') ? `، و${n('consistency_checks')} عُدّل سريعًا يحتاج مراجعة اتساق` : ''}` : 'لا شيء',
       btn: revN ? `<button class="btn primary" data-copy="revise">انسخ رسالة التعديلات</button>${OPEN_CLAUDE}` : '' },
-    { id: 'done', name: 'خلاصة', work: false, text: `معتمد ${n('approved')} من ${n('total')}${c.topics_confirmed === undefined ? '' : `، ومواضيع متأكدة ${n('topics_confirmed')} من ${n('total')}`}`, btn: '' },
+    { id: 'done', name: 'خلاصة', work: false, text: !n('total') ? 'بعد الاستخراج' : `معتمد ${n('approved')} من ${n('total')}${c.topics_confirmed === undefined ? '' : `، ومواضيع متأكدة ${n('topics_confirmed')} من ${n('total')}`}`, btn: '' },
   ];
   const fin = chapDone(c);
   const rec = (steps.find(s => s.work) || {}).id;
-  const file = b ? [
-    n('page_count') && n('pages_done') < n('page_count') ? `<span class="tag amber">صور الصفحات: ${n('pages_done')} من ${n('page_count')}</span><button class="linkbtn" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '',
+  const file = b ? [   // 5.9: the missing page images are step 1 now, with their button
     c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
     n('total') === 0 ? `<button class="linkbtn danger" type="button" data-delrun="${Number(c.run_id)}">🗑️ مسح الشابتر</button>` : '',
   ].join('') : '';
   const recStep = steps.find(s => s.id === rec);
-  const chips = [n('unsolved') + n('awaiting_reason') ? `${n('unsolved') + n('awaiting_reason')} للحل` : '', n('awaiting_rebuild') ? `${n('awaiting_rebuild')} تركيب` : '',
-    reviewN ? `${reviewN} مراجعة` : '', revN ? `${revN} تعديلات` : '', n('total') && topicLeft(c) ? `${topicLeft(c)} مواضيع للتأكيد` : '', `معتمد ${n('approved')} من ${n('total')}`].filter(Boolean).join(' · ');
+  // 5.9: each step has a round mark: ✓ when done, its number otherwise; only the step for now is filled (its mark and its main button), so one thing is asked at a time
+  const tot = n('total') > 0;
+  const okOf = s => s.id === 'pages' ? pagesLeft === 0 && (n('page_count') > 0 || tot) : tot && !s.work && !!({ extract: true, solve: solveN === 0 && n('unsolved') === 0, topics: c.topics_confirmed === undefined || (topicLeft(c) === 0 && chapRecheck(c) === 0),
+    rebuild: n('awaiting_rebuild') === 0, review: reviewN === 0, revise: revN === 0, done: fin })[s.id];
+  const stOf = s => okOf(s) ? 'ok' : s.id === rec ? 'now' : s.work ? 'next' : 'wait';
+  const ST_L = { ok: 'خلصت', now: 'دلوقتي', next: 'فيها شغل بعد اللي دلوقتي', wait: 'لسه' };
+  // 5.9 (owner 8/10): where the chapter stands from the upload on, the same marks as the steps inside, then what is left in their order
+  const trk = `<ol class="trk" aria-label="مراحل الشابتر">${steps.map((s, i) => { const st = stOf(s); return `<li class="${st}" title="${i + 1}. ${s.name}: ${ST_L[st]}"><b>${st === 'ok' ? '✓' : i + 1}</b></li>`; }).join('')}</ol>`;
+  // the step for now is the one pill in the list ("دلوقتي: حل 12"); each item stays whole on one line
+  const leftItems = steps.filter(s => s.left).map(s => { const t = s.left === true ? s.name : `${s.name} ${s.left}`; return s.id === rec ? `<span class="tag cobalt now">دلوقتي: ${t}</span>` : `<span class="li">${t}</span>`; });
+  const sumLine = fin ? '<span class="tag ok">✅ اكتمل</span> <span class="muted">مفيش باقي</span>'
+    : leftItems.length ? `<span class="left-h">📋 الباقي:</span> ${leftItems.join('<span class="sep"> · </span>')}` : recStep ? `<span class="tag cobalt now">دلوقتي: ${recStep.name}</span>` : '';
+  const bars = tot ? `<div class="chap-bars">${progBar('الاعتماد', n('approved'), n('total'), 'a')}${c.topics_confirmed === undefined ? '' : progBar('المواضيع', n('topics_confirmed'), n('total'), 't')}</div>` : '';
   const isOpen = chapOpen().includes(Number(c.run_id));
+  const tagOf = (s, st) => st === 'now' ? ' <span class="tag cobalt">دلوقتي</span>' : st === 'next' ? ' <span class="tag">بعدها</span>' : st === 'wait' && s.wait ? ` <span class="tag">${s.wait}</span>` : '';
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
     <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>
-      <div class="chap-sum small">${fin ? '<span class="tag ok">✅ اكتمل</span> ' : recStep ? `<span class="tag cobalt">المقترح: ${recStep.name}</span> ` : ''}<span class="muted">${chips}</span></div></summary>
+      ${trk}<div class="chap-sum small">${sumLine}</div>${bars}</summary>
     ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
     <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
     ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}
-    <ol class="chsteps">${steps.map(s => `<li class="chstep${s.id === rec ? ' rec' : ''}${s.work ? '' : ' idle'}"><div class="grow"><b>${s.name}</b> <span class="small muted">${s.text}</span>${s.id === rec ? ' <span class="tag cobalt">الخطوة المقترحة</span>' : ''}</div>${s.btn}</li>`).join('')}</ol>
+    <ol class="chsteps">${steps.map((s, i) => { const st = stOf(s); return `<li class="chstep ${st}${s.id === rec ? ' rec' : ''}${s.work ? ' work' : ' idle'}${st === 'ok' ? ' ok' : ''}"><span class="st-ic" aria-hidden="true">${st === 'ok' ? '✓' : i + 1}</span><div class="grow"><div class="st-t"><b>${s.name}</b> <span class="small muted">${s.text}</span>${tagOf(s, st)}</div>${s.btn ? `<div class="st-btns">${st === 'now' ? s.btn : s.btn.replace(/\bbtn primary\b/g, 'btn sec')}</div>` : ''}</div></li>`; }).join('')}</ol>
   </details>`;
 }
 /* ---------- v4.8 (item 92 phase 2): ➕ new chapter ----------
