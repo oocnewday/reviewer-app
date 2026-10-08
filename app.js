@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.6';
-const APP_BUILD = '7/10/2026';
+const APP_VERSION = '5.7';
+const APP_BUILD = '8/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -385,6 +385,7 @@ const FOLDERS = [
   { id: 'approved', label: 'معتمدة', test: r => r.status === 'approved' },
   { id: 'alerts', label: 'فيها تنبيه ⚠️', test: r => !!(r.alert_kinds && r.alert_kinds.length) },   // 3.9: "⚠️ للمراجع" block (backlog 24); kept before 'all' so navigation inside folders is unchanged
   { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the tile always shows (5.5)
+  { id: 'topicre', label: 'مواضيع تتراجع 🏷️', test: r => !!(S.topicR && S.topicR.has(r.qid)) },   // 5.7 (migration 062): edited after the topics were confirmed
   { id: 'all', label: 'الكل', test: () => true },
 ];
 const SORTS = { priority: 'الأولوية (المختلف والأقل ثقة أولًا)', id_asc: 'رقم السؤال: تصاعدي', id_desc: 'رقم السؤال: تنازلي', conf_low: 'الثقة: الأقل أولًا', conf_high: 'الثقة: الأعلى أولًا' };
@@ -434,12 +435,12 @@ function applyFilters(rows, view, skip) {
 }
 /* 5.3: the folders as a grid in three groups (every folder visible, same-size tiles; a folder with work for you gets a
    coloured count), and the filters as sections, each with one line saying exactly what it brings back. */
-const FOLDER_GROUPS = [['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
-const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups']);
+const FOLDER_GROUPS = [['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes', 'topicre']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
+const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups', 'topicre']);
 const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات الطلاب' };   // shorter on the tile; the list title keeps the full name
 function folderGrid(v, counts) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
   return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, ids]) => {
-    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(Boolean);
+    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (f.id !== 'topicre' || S.topicR));   // 5.7: no tile before migration 062
     return tiles.length ? `<div class="fg-h">${title}</div><div class="fg">${tiles.map(f => `<button class="ftile${counts[f.id] ? '' : ' zero'}${HOT.has(f.id) && counts[f.id] ? ' hot' : ''}" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}"><span class="ft-l">${TILE_LABEL[f.id] || f.label}</span><span class="ft-n">${counts[f.id]}</span></button>`).join('')}</div>` : '';
   }).join('')}</nav>`;
 }
@@ -524,6 +525,7 @@ async function loadQueue() {
   const ts = rpc('topic_states').catch(e => { console.warn('topic_states:', e && e.message); return null; });   // 5.3 (migration 048)
   const [q, n, , , p, ch] = await Promise.all(tasks);
   const tsv = await ts; S.topicC = tsv ? new Set(tsv.c || []) : null; S.topicS = tsv ? new Set(tsv.s || []) : null;
+  S.topicR = tsv && tsv.r ? new Set(tsv.r) : null;   // 5.7 (migration 062): edited after the topics were confirmed
   S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.chapters = Array.isArray(ch) ? ch : null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
   S.queue = S.rows.filter(FOLDERS[0].test);
   S.rebuild = (await rb) || [];
@@ -646,6 +648,7 @@ function renderQueue() {
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
     ${folderGrid(v, counts)}
+    ${v.folder === 'topicre' ? `<p class="hint rb-lead">أسئلة اتعدّلت بعد ما مواضيعها اتأكدت. افتح كل سؤال وشوف مواضيعه لسه مناسبة ولا محتاجة تتغير.</p>` : ''}
     ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn${activeFilters ? ' f-on' : ''}" id="tog-f" aria-expanded="${v.showFilters}">🔍 تصفية${activeFilters ? ` (${activeFilters})` : ''} <span aria-hidden="true">${v.showFilters ? '▴' : '▾'}</span></button>
@@ -656,7 +659,7 @@ function renderQueue() {
     <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
-      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
+      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : v.folder === 'topicre' && !activeFilters ? 'مفيش أسئلة مواضيعها محتاجة مراجعة.' : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
     ${installListCard()}
     ${appFooter()}
   </main>`;
@@ -905,16 +908,53 @@ async function loadTopic() {
   if (!t || S.qid !== qid || !document.getElementById('qtopic')) return;
   S.topic = t;
   const { conf, sug, list } = topicSets(t);
-  const tag = list.length ? ` <span class="tag ${sug.length ? 'amber' : 'ok'}">${sug.length ? 'مقترح' : 'متأكد'}</span>` : '';
+  const re = !!t.recheck && !sug.length;   // 5.7 (migration 062): edited after the topics were confirmed
+  const tag = list.length ? ` <span class="tag ${sug.length || re ? 'amber' : 'ok'}">${sug.length ? 'مقترح' : re ? 'اتعدّل بعد التأكيد' : 'متأكد'}</span>` : '';
   const was = sug.length && conf.length ? ` <span class="small muted">(المتأكد حاليًا: ${conf.map(x => `<bdi>${esc(x.name)}</bdi>`).join('، ')})</span>` : '';
   const edit = t.can_edit ? ' <button class="linkbtn" type="button" id="qtopic-edit">تغيير</button>' : '';
-  box.innerHTML = !list.length ? `الموضوع: <span class="muted">لسه مالوش موضوع</span>${edit}`
+  const status = S.bundle?.question?.status;
+  // 5.7 (owner 8/10): one tap to confirm the suggested topics as they are, approved or not; and, after an edit, one tap to say they still fit
+  const many = (sug.length || list.length) > 1;
+  const ok = !t.can_edit ? ''
+    : sug.length ? `<div class="tp-ok"><button class="btn ok small" type="button" id="qtopic-ok">✓ تأكيد ${many ? 'المواضيع' : 'الموضوع'}</button><span class="small muted">${many ? 'راجعتها؟ أكّدها علشان تظهر للطلاب.' : 'راجعته؟ أكّده علشان يظهر للطلاب.'}</span></div>`
+    : re ? `<div class="tp-ok tp-re"><span class="small">السؤال اتعدّل بعد ما ${many ? 'المواضيع اتأكدت. لسه مناسبة؟' : 'الموضوع اتأكد. لسه مناسب؟'}</span><button class="btn ok small" type="button" id="qtopic-still">✓ ${many ? 'لسه مناسبة' : 'لسه مناسب'}</button></div>` : '';
+  box.innerHTML = (!list.length ? `الموضوع: <span class="muted">لسه مالوش موضوع</span>${edit}`
     : list.length > 1 ? `المواضيع (${list.length}):${tag}${edit}${topicNames(list)}${was}`
-    : `الموضوع: <b>${topicNames(list)}</b>${tag}${was}${edit}`;
-  box.classList.toggle('wide', list.length > 1);
+    : `الموضوع: <b>${topicNames(list)}</b>${tag}${was}${edit}`) + ok;
+  box.classList.toggle('wide', list.length > 1 || !!ok);
   box.hidden = false;
+  const done = r => { topicMoved(qid, r); return loadTopic(); };
   const b = document.getElementById('qtopic-edit');
-  if (b) b.onclick = () => openTopicPicker(qid, t, { status: S.bundle?.question?.status, onDone: loadTopic });
+  if (b) b.onclick = () => openTopicPicker(qid, t, { status, onDone: done });
+  const k = document.getElementById('qtopic-still');
+  if (k) k.onclick = async () => {
+    k.disabled = true;
+    try {
+      const y = await rpc('topics_still_ok', { p_qid: qid });
+      notify(y ? (many ? 'تمام، المواضيع زي ما هي بفضل الله' : 'تمام، الموضوع زي ما هو بفضل الله') : 'ماتسجلش', y ? 'السؤال خرج من "مواضيع تتراجع".' : 'مواضيع السؤال اتغيرت من مكان تاني، والسطر اتحدّث.', y ? 'ok' : 'info');
+      await done(y ? 'checked' : '');
+    } catch (e) { console.warn('topics_still_ok:', e); k.disabled = false; notify('ماتسجلش', errText(e), 'info'); }
+  };
+  const c = document.getElementById('qtopic-ok');
+  if (c) c.onclick = async () => {
+    c.disabled = true;
+    try {
+      const n = await rpc('confirm_topics', { p_qids: [qid] });
+      if (n) notify(many ? 'تم تأكيد المواضيع بفضل الله' : 'تم تأكيد الموضوع بفضل الله', many ? 'هتظهر للطلاب مع السؤال في المزامنة الجاية.' : 'هيظهر للطلاب مع السؤال في المزامنة الجاية.');
+      else notify('ماتأكدش', 'الاقتراح اتغيّر أو اتأكد من مكان تاني، والسطر اتحدّث.', 'info');
+      await done(n ? 'confirmed' : '');
+    } catch (e) { console.warn('confirm_topics:', e); c.disabled = false; notify('ماتأكدش', errText(e), 'info'); }
+  };
+}
+// 5.7: the list's topic filter ("🏷️ منتظر التصنيف") and the folder "مواضيع تتراجع" follow a change made on the question page at once;
+// next / previous keep the order the folder had, as after a duplicate decision
+function topicMoved(qid, r) {
+  if (!S.topicC || !S.topicS || !['confirmed', 'suggested', 'checked', 'unchanged'].includes(r)) return;
+  const before = listFor().map(x => x.qid), folder = S.view.folder;
+  if (r === 'confirmed') S.topicC.add(qid);
+  if (r === 'suggested') S.topicS.add(qid); else S.topicS.delete(qid);   // same set as the confirmed one: the server drops a pending suggestion
+  if ((r === 'confirmed' || r === 'checked') && S.topicR) S.topicR.delete(qid);   // a confirm counts as a check (062)
+  if (S.qid === qid && before.includes(qid)) S.navHold = { qid, folder, list: before };
 }
 // the picker: tick 1 to 3 topics; with 2 or 3 the reviewer must say which one is the primary (it shows first to students)
 function openTopicPicker(qid, t, opt = {}) {
@@ -925,7 +965,7 @@ function openTopicPicker(qid, t, opt = {}) {
   const approved = opt.status === 'approved';
   const { sheet, close } = openSheet(`
     <div class="sheet-head"><h2>🏷️ مواضيع السؤال</h2></div>
-    <p class="small muted">مواضيع شابتر <bdi>${esc(t.chapter?.name || '')}</bdi>. علّم من موضوع واحد لـ ${max} مواضيع. ${approved ? 'السؤال معتمد، فاختيارك هيتأكد على طول.' : 'اختيارك هيفضل مقترح، ويتأكد لما السؤال يتعتمد.'}</p>
+    <p class="small muted">مواضيع شابتر <bdi>${esc(t.chapter?.name || '')}</bdi>. علّم من موضوع واحد لـ ${max} مواضيع. ${approved ? 'السؤال معتمد، فاختيارك هيتأكد على طول.' : 'اختيارك هيفضل مقترح لحد ما تضغط "✓ تأكيد"، أو يتعتمد السؤال.'}</p>
     <div class="topic-list" id="tp-list"></div>
     <p class="hint tp-why" id="tp-why" hidden>⭐ الأساسي هو اللي بيظهر للطالب على شاشة السؤال، والباقي بيظهر بعده. اختار الأساسي من المواضيع اللي علّمت عليها.</p>
     <div class="tp-new"><button class="linkbtn" type="button" id="tp-new-open" aria-expanded="false">➕ موضوع جديد</button>
@@ -984,10 +1024,13 @@ function openTopicPicker(qid, t, opt = {}) {
     const p = sel.length === 1 ? sel[0] : prim, ids = [p, ...sel.filter(x => x !== p)];
     b.disabled = true;
     try {
-      const r = await rpc('set_question_topics', { p_qid: qid, p_topic_ids: ids, p_primary: p });
+      let r = await rpc('set_question_topics', { p_qid: qid, p_topic_ids: ids, p_primary: p });
+      // 5.7 (062): saving the same set on a question edited after its topics were confirmed = "the topics still fit"
+      if (r === 'unchanged' && t.recheck) { try { if (await rpc('topics_still_ok', { p_qid: qid })) r = 'checked'; } catch (x) { console.warn('topics_still_ok:', x); } }
       close(true);
-      notify(r === 'confirmed' ? 'تم تأكيد المواضيع بفضل الله' : r === 'unchanged' ? 'المواضيع زي ما هي' : 'تم حفظ المواضيع المقترحة', r === 'suggested' ? 'هتتأكد لما السؤال يتعتمد.' : '');
-      if (opt.onDone) opt.onDone();
+      notify(r === 'confirmed' ? 'تم تأكيد المواضيع بفضل الله' : r === 'checked' ? (ids.length > 1 ? 'تمام، المواضيع زي ما هي بفضل الله' : 'تمام، الموضوع زي ما هو بفضل الله') : r === 'unchanged' ? 'المواضيع زي ما هي' : 'تم حفظ المواضيع المقترحة',
+        r === 'suggested' ? 'هتتأكد لما تضغط "✓ تأكيد"، أو لما السؤال يتعتمد.' : r === 'checked' ? 'السؤال خرج من "مواضيع تتراجع".' : '');
+      if (opt.onDone) opt.onDone(r);   // 5.7: the result goes along, so the question page can update the list's topic filter
     } catch (x) { console.warn('set_question_topics:', x); b.disabled = false; err.textContent = errText(x); }
   };
 }
