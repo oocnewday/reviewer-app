@@ -628,3 +628,8 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .bar-help{position:absolute;top:-19px;inset-inline-end:14px;width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:var(--surface);box-shadow:0 1px 6px rgba(0,0,0,.12);font-size:1rem;cursor:pointer;z-index:1}
 .bhelp dt{font-weight:700;margin-top:12px}
 .bhelp dd{margin:3px 0 0;color:var(--ink-2);font-size:.9rem;line-height:1.65}
+/* 5.7.1: the topics list scrolls on its own (no pull-through to the sheet), and fades at the edge that has more */
+.topic-list{overscroll-behavior:contain}
+.topic-list.fade-b{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent)}
+.topic-list.fade-t{-webkit-mask-image:linear-gradient(to bottom,transparent,#000 22px);mask-image:linear-gradient(to bottom,transparent,#000 22px)}
+.topic-list.fade-t.fade-b{-webkit-mask-image:linear-gradient(to bottom,transparent,#000 22px,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to bottom,transparent,#000 22px,#000 calc(100% - 36px),transparent)}

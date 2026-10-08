@@ -14,7 +14,7 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.7';
+const APP_VERSION = '5.7.1';
 const APP_BUILD = '8/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -2053,9 +2053,20 @@ function openSheet(html, { onClose, canClose } = {}) {
   sheetClose = close;
   history.pushState({ sheet: true }, '');
   sc.addEventListener('click', e => { if (e.target === sc) close(); });
-  // drag to close: from the handle/header anywhere, or from the body when it is scrolled to the top
+  // drag to close: from the handle/header anywhere, or from the body when it is scrolled to the top.
+  // 5.7.1 (owner 8/10): never from inside a list that scrolls by itself (the topics list): there a drag down scrolls the list back up
   let y0 = null, dy = 0;
-  const start = e => { const t = e.touches ? e.touches[0] : e; if (e.target.closest('textarea,input,select,audio,button:not(.grab)')) return; if (!e.target.closest('.grab,.sheet-head') && sheet.scrollTop > 0) return; y0 = t.clientY; dy = 0; sheet.classList.add('dragging'); };
+  const innerScroll = el => {
+    for (let n = el; n && n !== sheet; n = n.parentElement) {
+      if (n.scrollHeight > n.clientHeight + 1 && /^(auto|scroll)$/.test(getComputedStyle(n).overflowY)) return true;
+    }
+    return false;
+  };
+  const start = e => { const t = e.touches ? e.touches[0] : e; if (e.target.closest('textarea,input,select,audio,button:not(.grab)')) return; if (!e.target.closest('.grab,.sheet-head') && (sheet.scrollTop > 0 || innerScroll(e.target))) return; y0 = t.clientY; dy = 0; sheet.classList.add('dragging'); };
+  // 5.7.1: a list that scrolls by itself fades at the edge that has more, so it shows there is more after the scrollbar hides
+  const fade = n => { n.classList.toggle('fade-t', n.scrollTop > 2); n.classList.toggle('fade-b', n.scrollTop + n.clientHeight < n.scrollHeight - 2); };
+  sheet.addEventListener('scroll', e => { if (e.target.classList && e.target.classList.contains('topic-list')) fade(e.target); }, true);
+  requestAnimationFrame(() => sheet.querySelectorAll('.topic-list').forEach(fade));
   const move = e => { if (y0 === null) return; const t = e.touches ? e.touches[0] : e; dy = Math.max(0, t.clientY - y0); if (dy > 0) { sheet.style.transform = `translateY(${dy}px)`; if (e.cancelable && e.touches) e.preventDefault(); } };
   const end = () => { if (y0 === null) return; sheet.classList.remove('dragging'); y0 = null; if (dy > 110) { if (!close()) sheet.style.transform = ''; } else sheet.style.transform = ''; };
   sheet.addEventListener('touchstart', start, { passive: true }); sheet.addEventListener('touchmove', move, { passive: false }); sheet.addEventListener('touchend', end);
