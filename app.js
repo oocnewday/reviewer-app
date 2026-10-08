@@ -14,7 +14,7 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.7.1';
+const APP_VERSION = '5.8';
 const APP_BUILD = '8/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -429,7 +429,8 @@ function applyFilters(rows, view, skip) {
   if (skip !== 'hidden' && view.hidden) rows = rows.filter(r => isHidden(r) && (!view.hiddenKind || view.hiddenKind === 'all' || r.student_state === view.hiddenKind));
   if (skip !== 'topic' && view.topic && view.topic !== 'all' && S.topicC) {   // 5.3 (migration 048)
     const t = view.topic;
-    rows = rows.filter(r => !S.topicC.has(r.qid) && (t === 'pending' || (t === 'suggested' ? S.topicS.has(r.qid) : !S.topicS.has(r.qid))));
+    rows = t === 'confirmed' ? rows.filter(r => S.topicC.has(r.qid))   // 5.8 (owner 8/10): the confirmed ones, for a second look
+      : rows.filter(r => !S.topicC.has(r.qid) && (t === 'pending' || (t === 'suggested' ? S.topicS.has(r.qid) : !S.topicS.has(r.qid))));
   }
   return rows;
 }
@@ -454,11 +455,12 @@ function filtersPanel(v, fx) {
   const tog = (id, on, label, cnt, help) => `<div class="frow"><button class="chip" aria-pressed="${on}" id="${id}">${label}<span class="n">${cnt}</span></button><p class="fhelp">${help}</p></div>`;
   let topic = '';
   if (S.topicC) {
-    const pend = (v.topic || 'all') !== 'all';
-    const base = applyFilters(inFolder, v, 'topic').filter(r => !S.topicC.has(r.qid));
+    const pend = ['pending', 'suggested', 'none'].includes(v.topic);
+    const all = applyFilters(inFolder, v, 'topic'), base = all.filter(r => !S.topicC.has(r.qid));
     const sug = base.filter(r => S.topicS.has(r.qid)).length;
-    topic = `<div class="frow"><button class="chip" aria-pressed="${pend}" data-topic="${pend ? 'all' : 'pending'}">🏷️ منتظر التصنيف<span class="n">${base.length}</span></button><p class="fhelp">موضوعه لسه ماتأكدش. المقترح بيتأكد مع الاعتماد، أو من "مواضيع الشابتر".</p></div>
-      ${pend ? `<div class="chips sub"><button class="chip" aria-pressed="${v.topic === 'suggested'}" data-topic="suggested">مقترح<span class="n">${sug}</span></button><button class="chip" aria-pressed="${v.topic === 'none'}" data-topic="none">مالوش موضوع<span class="n">${base.length - sug}</span></button></div>` : ''}`;
+    topic = `<div class="frow"><button class="chip" aria-pressed="${pend}" data-topic="${pend ? 'all' : 'pending'}">🏷️ منتظر التصنيف<span class="n">${base.length}</span></button><p class="fhelp">موضوعه لسه ماتأكدش. المقترح بيتأكد بزرار "✓ تأكيد" في صفحة السؤال، أو مع الاعتماد.</p></div>
+      ${pend ? `<div class="chips sub"><button class="chip" aria-pressed="${v.topic === 'suggested'}" data-topic="suggested">مقترح<span class="n">${sug}</span></button><button class="chip" aria-pressed="${v.topic === 'none'}" data-topic="none">مالوش موضوع<span class="n">${base.length - sug}</span></button></div>` : ''}
+      <div class="frow"><button class="chip" aria-pressed="${v.topic === 'confirmed'}" data-topic="${v.topic === 'confirmed' ? 'all' : 'confirmed'}">✅ مواضيعه متأكدة<span class="n">${all.length - base.length}</span></button><p class="fhelp">موضوعه اتأكد وبيظهر للطلاب، علشان لو حابب تبص عليها تاني.</p></div>`;
   }
   return `<div class="filters">
     <div class="fsec"><div class="fsec-h">🤖 ثقة Claude</div><p class="fhelp">قد إيه Claude كان متأكد من حله.</p>
@@ -481,7 +483,7 @@ function activeLine(v) {
   if (v.chapter !== 'all') x(v.chapter, { chapter: 'all' });
   if (v.disagree) x('كل المختلف', { disagree: false });
   if (v.incomplete) x('كل الناقص', { incomplete: false });
-  if (S.topicC && v.topic && v.topic !== 'all') x(v.topic === 'suggested' ? 'موضوع مقترح' : v.topic === 'none' ? 'مالوش موضوع' : 'منتظر التصنيف', { topic: 'all' });
+  if (S.topicC && v.topic && v.topic !== 'all') x(v.topic === 'suggested' ? 'موضوع مقترح' : v.topic === 'none' ? 'مالوش موضوع' : v.topic === 'confirmed' ? 'مواضيعه متأكدة' : 'منتظر التصنيف', { topic: 'all' });
   if (v.hidden) x(v.hiddenKind && v.hiddenKind !== 'all' ? `مخفي: ${hiddenLabel(v.hiddenKind)}` : 'المخفي', { hidden: false, hiddenKind: 'all' });
   return `<div class="aline"><span class="small muted">التصفية:</span>${it.join('')}<button class="linkbtn small" id="f-clear">مسح الكل</button></div>`;
 }
@@ -646,6 +648,7 @@ function renderQueue() {
   <main class="wrap">
     ${staffCard()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
+    ${S.topicC && S.rows.some(r => r.chapter) ? '<button class="feed-btn" type="button" id="chsum"><span aria-hidden="true">📊</span> ملخص الشباتر <span class="feed-sub">الاعتماد والمواضيع لكل شابتر</span></button>' : ''}
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
     ${folderGrid(v, counts)}
     ${v.folder === 'topicre' ? `<p class="hint rb-lead">أسئلة اتعدّلت بعد ما مواضيعها اتأكدت. افتح كل سؤال وشوف مواضيعه لسه مناسبة ولا محتاجة تتغير.</p>` : ''}
@@ -707,6 +710,8 @@ function renderQueue() {
   $app.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.link)); if (c) openDriveLink(c); });
   $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
   $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.fgrid') || document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
+  const cs = document.getElementById('chsum'); if (cs) cs.onclick = openChapterSummary;
+  $app.querySelectorAll('[data-gotopic]').forEach(b => b.onclick = () => goTopics(b.dataset.gotopic, null));
   bindInstall();
   const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
   if (S.isAdmin && S.pipeline) loadSolver();
@@ -2596,6 +2601,51 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => { }));
 }
 
+/* 5.8 (owner 8/10): "📊 ملخص الشباتر" for every reviewer: per chapter, from the questions in his folders, how many are approved
+   and how many have confirmed topics; a chapter is complete when both are full (and none waits in "مواضيع تتراجع"). */
+function chapterSummary() {
+  const by = new Map();
+  for (const r of S.rows) {
+    if (!r.chapter) continue;
+    const g = by.get(r.chapter) || { name: r.chapter, total: 0, approved: 0, conf: 0, re: 0 };
+    g.total++; if (r.status === 'approved') g.approved++;
+    if (S.topicC && S.topicC.has(r.qid)) g.conf++;
+    if (S.topicR && S.topicR.has(r.qid)) g.re++;
+    by.set(r.chapter, g);
+  }
+  return [...by.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+}
+// the list, opened on one topic state ("pending" = not confirmed yet, or "confirmed"), in one chapter when the chapter filter has it
+function goTopics(topic, ch) {
+  S.view = { ...S.view, ...NO_FILTERS, folder: 'all', topic, chapter: ch && chapterList().includes(ch) ? ch : 'all' };
+  saveView(); S.listLimit = 60; renderQueue();
+  const h = document.querySelector('.aline') || document.querySelector('.qhead'); if (h) h.scrollIntoView({ block: 'start' });
+}
+function openChapterSummary() {
+  const pct = (a, b) => b ? Math.round(a * 100 / b) : 0;
+  const bar = (label, a, b, cls) => `<div class="cs-bar"><span class="cs-l">${label}</span><span class="cs-track ${cls}" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="${b}" aria-valuenow="${a}"><i style="width:${pct(a, b)}%"></i></span><span class="cs-n">${a} من ${b}</span></div>`;
+  const rows = chapterSummary().map(g => {
+    const done = g.approved === g.total && g.conf === g.total && !g.re, wait = g.total - g.conf;
+    return `<div class="cs-row${done ? ' done' : ''}">
+      <div class="cs-h"><b><bdi>${esc(g.name)}</bdi></b> <span class="small muted">${g.total} سؤال</span>${done ? ' <span class="tag ok">✅ اكتمل بفضل الله</span>' : ''}</div>
+      ${bar('الاعتماد', g.approved, g.total, 'a')}${bar('المواضيع', g.conf, g.total, 't')}
+      <div class="cs-act">${wait ? `<button class="linkbtn" type="button" data-cs="pending" data-ch="${esc(g.name)}">مستني تأكيد (${wait})</button>` : ''}${g.conf ? `<button class="linkbtn" type="button" data-cs="confirmed" data-ch="${esc(g.name)}">المتأكدة (${g.conf})</button>` : ''}${g.re ? `<button class="linkbtn" type="button" data-cs="topicre">في "مواضيع تتراجع" (${g.re})</button>` : ''}</div>
+    </div>`;
+  }).join('');
+  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📊 ملخص الشباتر</h2>
+      <p class="hint" style="margin-top:4px">من الأسئلة اللي في فولدراتك. الشابتر بيكمل لما كل أسئلته تتعتمد، ومواضيعها كلها تتأكد.</p></div>
+    <div class="csum">${rows || '<p class="small muted">مفيش أسئلة لسه.</p>'}</div>
+    <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
+  sheet.querySelector('[data-close]').onclick = () => close();
+  sheet.querySelectorAll('[data-cs]').forEach(b => b.onclick = () => {
+    const t = b.dataset.cs, ch = b.dataset.ch; close();
+    setTimeout(() => {
+      if (t === 'topicre') { S.view = { ...S.view, ...NO_FILTERS, folder: 'topicre' }; saveView(); S.listLimit = 60; renderQueue(); document.querySelector('.qhead')?.scrollIntoView({ block: 'start' }); }
+      else goTopics(t, ch);
+    }, 200);
+  });
+}
+
 function staffCard() {
   const p = S.pipeline; if (!S.isAdmin || !p) return '';
   const st = p.by_status || {};
@@ -2630,11 +2680,20 @@ function legacyRows(p) {
    A copy button sits next to every step a chat can do now; two can be open at once (new questions to solve + revisions).
    The suggested step is the first one with work, in pipeline order. Old Glaucoma batches (no single batch) get no batch line. */
 // 5.0: chapters with work first (newest first), finished chapters (all approved, nothing to do) grouped at the end
+// 5.8 (owner 8/10): "finished" also needs every question's topics confirmed (and none waiting in "مواضيع تتراجع")
 const chapOpen = () => { try { return JSON.parse(localStorage.getItem('chapOpen') || '[]'); } catch { return []; } };
-function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0; }
+const topicLeft = c => { const n = k => Number(c[k]) || 0; return c.topics_confirmed === undefined ? 0 : Math.max(0, n('total') - n('topics_confirmed')) + n('topics_pending_change'); };
+// edited after their topics were confirmed, in this file's chapters (the list has no file per question; one file per chapter so far)
+function chapRecheck(c) {
+  if (!S.topicR || !S.topicR.size) return 0;
+  const names = new Set((c.chapters || []).map(x => x.name));
+  return S.rows.filter(r => S.topicR.has(r.qid) && names.has(r.chapter)).length;
+}
+function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0 || (n('total') > 0 && topicLeft(c) + chapRecheck(c) > 0); }
+const chapDone = c => Number(c.total) > 0 && Number(c.approved) === Number(c.total) && !chapWork(c);
 function chapterCardsHTML(list) {
   const sorted = list.slice().sort((a, b) => (chapWork(b) - chapWork(a)) || (Number(b.run_id) - Number(a.run_id)));
-  const done = sorted.filter(c => !chapWork(c) && Number(c.total) > 0 && Number(c.approved) === Number(c.total));
+  const done = sorted.filter(chapDone);
   const active = sorted.filter(c => !done.includes(c));
   return active.map(chapterCard).join('') + (done.length ? `<details class="chap-done"><summary>✅ شباتر خلصت (${done.length})</summary>${done.map(chapterCard).join('')}</details>` : '');
 }
@@ -2653,11 +2712,14 @@ function chapterCard(c) {
       btn: solveN ? `<button class="btn primary" data-copy="${b ? `s${key}` : 'solve'}">انسخ رسالة الحل</button>${OPEN_CLAUDE}` : '' },
     ...(c.topics_confirmed === undefined ? [] : [(() => {
       const none = Math.max(0, n('total') - n('topics_confirmed') - n('topics_suggested'));
+      const sug = n('topics_suggested'), pc = n('topics_pending_change'), re = chapRecheck(c), wait = sug + none;
       S.copyMsgs[`t${key}`] = msgTopics(c);
       const chs = (c.chapters || []).map(x => `<a class="btn sec small" href="#topics/${Number(x.id)}">🏷️ ${esc(x.name)} (${Number(x.n)})</a>`).join('');
-      return { id: 'topics', name: 'مواضيع', work: n('total') > 0 && none > 0 && solveN === 0,
-        text: n('total') ? `${n('topics_confirmed')} متأكد · ${n('topics_suggested')} مقترح · ${none} مالهاش موضوع` : 'بعد الاستخراج والحل',
-        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${chs}` : '' };
+      // 5.8: suggested topics wait for a reviewer's confirmation; the step is suggested once the review and the revisions are done
+      return { id: 'topics', name: 'مواضيع', work: n('total') > 0 && solveN === 0 && (none > 0 || (sug + pc + re > 0 && reviewN === 0 && revN === 0)),
+        text: n('total') ? [`${n('topics_confirmed')} متأكد من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '',
+          pc ? `${pc} متأكد وعليه اقتراح زيادة` : '', re ? `${re} في "مواضيع تتراجع"` : ''].filter(Boolean).join(' · ') : 'بعد الاستخراج والحل',
+        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${wait ? `<button class="btn${none ? ' sec' : ' primary'}" type="button" data-gotopic="pending">افتح المستني (${wait})</button>` : ''}${re ? '<button class="btn sec" type="button" data-gofolder="topicre">افتح "مواضيع تتراجع"</button>' : ''}${chs}` : '' };
     })()]),
     { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0,
       text: n('awaiting_rebuild') ? `${n('awaiting_rebuild')} ينتظر إعادة التركيب` : 'لا شيء',
@@ -2668,8 +2730,9 @@ function chapterCard(c) {
     { id: 'revise', name: 'تعديلات', work: revN > 0,
       text: revN ? `${n('open_requests')} طلب تعديل مفتوح${n('consistency_checks') ? `، و${n('consistency_checks')} عُدّل سريعًا يحتاج مراجعة اتساق` : ''}` : 'لا شيء',
       btn: revN ? `<button class="btn primary" data-copy="revise">انسخ رسالة التعديلات</button>${OPEN_CLAUDE}` : '' },
-    { id: 'done', name: 'خلاصة', work: false, text: `معتمد ${n('approved')} من ${n('total')}`, btn: '' },
+    { id: 'done', name: 'خلاصة', work: false, text: `معتمد ${n('approved')} من ${n('total')}${c.topics_confirmed === undefined ? '' : `، ومواضيع متأكدة ${n('topics_confirmed')} من ${n('total')}`}`, btn: '' },
   ];
+  const fin = chapDone(c);
   const rec = (steps.find(s => s.work) || {}).id;
   const file = b ? [
     n('page_count') && n('pages_done') < n('page_count') ? `<span class="tag amber">صور الصفحات: ${n('pages_done')} من ${n('page_count')}</span><button class="linkbtn" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '',
@@ -2678,11 +2741,12 @@ function chapterCard(c) {
   ].join('') : '';
   const recStep = steps.find(s => s.id === rec);
   const chips = [n('unsolved') + n('awaiting_reason') ? `${n('unsolved') + n('awaiting_reason')} للحل` : '', n('awaiting_rebuild') ? `${n('awaiting_rebuild')} تركيب` : '',
-    reviewN ? `${reviewN} مراجعة` : '', revN ? `${revN} تعديلات` : '', `معتمد ${n('approved')} من ${n('total')}`].filter(Boolean).join(' · ');
+    reviewN ? `${reviewN} مراجعة` : '', revN ? `${revN} تعديلات` : '', n('total') && topicLeft(c) ? `${topicLeft(c)} مواضيع للتأكيد` : '', `معتمد ${n('approved')} من ${n('total')}`].filter(Boolean).join(' · ');
   const isOpen = chapOpen().includes(Number(c.run_id));
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
     <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>
-      <div class="chap-sum small">${recStep ? `<span class="tag cobalt">المقترح: ${recStep.name}</span> ` : ''}<span class="muted">${chips}</span></div></summary>
+      <div class="chap-sum small">${fin ? '<span class="tag ok">✅ اكتمل</span> ' : recStep ? `<span class="tag cobalt">المقترح: ${recStep.name}</span> ` : ''}<span class="muted">${chips}</span></div></summary>
+    ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
     <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
     ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}

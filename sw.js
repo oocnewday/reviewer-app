@@ -1,8 +1,8 @@
 /* OOC reviewer app – service worker.
    Network first for the page, code and design, so every update reaches reviewers on their next open;
    the cached copy is used only without a connection. Supabase (data, login, voice notes) is never cached. */
-const VERSION = 'ooc-review-v28';
-const SHELL = ['/', '/app.js?v=28', '/app.css?v=28', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png'];
+const VERSION = 'ooc-review-v29';
+const SHELL = ['/', '/app.js?v=29', '/app.css?v=29', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

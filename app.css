@@ -633,3 +633,17 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .topic-list.fade-b{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent)}
 .topic-list.fade-t{-webkit-mask-image:linear-gradient(to bottom,transparent,#000 22px);mask-image:linear-gradient(to bottom,transparent,#000 22px)}
 .topic-list.fade-t.fade-b{-webkit-mask-image:linear-gradient(to bottom,transparent,#000 22px,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(to bottom,transparent,#000 22px,#000 calc(100% - 36px),transparent)}
+/* 5.8: chapter summary for every reviewer, and the finished chapter line in the admin card */
+.chap-fin{margin:8px 0 2px;padding:8px 10px;border-radius:10px;background:var(--ok-2,rgba(34,139,84,.12));color:var(--ok);font-weight:700;line-height:1.6}
+.csum{display:grid;gap:10px;margin:6px 0 4px}
+.cs-row{border:1px solid var(--line-2);border-radius:12px;padding:10px 12px;background:var(--surface)}
+.cs-row.done{border-color:var(--ok)}
+.cs-h{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;margin-bottom:6px}
+.cs-bar{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;margin:4px 0;font-size:.85rem}
+.cs-l{min-width:4.6em;color:var(--ink-2)}
+.cs-n{color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.cs-track{display:block;height:8px;border-radius:99px;background:var(--line-2);overflow:hidden}
+.cs-track>i{display:block;height:100%;border-radius:99px;background:var(--cobalt)}
+.cs-track.t>i{background:var(--ok)}
+.cs-act{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:4px}
+.cs-act .linkbtn{min-height:36px}
