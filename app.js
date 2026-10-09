@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '5.9';
-const APP_BUILD = '8/10/2026';
+const APP_VERSION = '6.0';
+const APP_BUILD = '9/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -386,16 +386,64 @@ const FOLDERS = [
   { id: 'alerts', label: 'فيها تنبيه ⚠️', test: r => !!(r.alert_kinds && r.alert_kinds.length) },   // 3.9: "⚠️ للمراجع" block (backlog 24); kept before 'all' so navigation inside folders is unchanged
   { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the tile always shows (5.5)
   { id: 'topicre', label: 'مواضيع تتراجع 🏷️', test: r => !!(S.topicR && S.topicR.has(r.qid)) },   // 5.7 (migration 062): edited after the topics were confirmed
-  { id: 'notappr', label: 'لم تُعتمد', test: r => r.status !== 'approved' },   // 5.9 (owner 8/10): what is still missing in the chosen chapter
-  { id: 'untopic', label: 'لم تُصنّف 🏷️', test: r => !!(S.topicC && !S.topicC.has(r.qid)) },   // topics not confirmed yet (students see confirmed ones only)
+  { id: 'notappr', label: 'أسئلة لم تُعتمد', test: r => r.status !== 'approved' },   // 5.9 (owner 8/10): what is still missing in the chosen chapter (6.0: plural names)
+  { id: 'untopic', label: 'أسئلة لم تتأكد مواضيعها', test: r => !!(S.topicC && !S.topicC.has(r.qid)) },   // topics not confirmed yet (students see confirmed ones only)
+  // 6.0 (owner 9/10): every topic state is a folder in one group; "مستنية تأكيدك" has three parts the reviewer can switch off
+  { id: 'topicwait', label: 'مستنية تأكيدك', test: r => !!S.topicC && TPARTS.some(([k]) => TP[k](r)) },
+  { id: 'notopic', label: 'مالهاش موضوع لسه', test: r => !!(S.topicC && !S.topicC.has(r.qid) && !S.topicS.has(r.qid)) },
+  { id: 'topicok', label: 'مواضيعها متأكدة ✅', test: r => !!(S.topicC && S.topicC.has(r.qid)) },
   { id: 'all', label: 'الكل', test: () => true },
 ];
+// 6.0: the three parts of "مستنية تأكيدك": a first suggestion, an extra topic suggested on confirmed topics, and topics confirmed before an edit
+const TP = {
+  first: r => !S.topicC.has(r.qid) && S.topicS.has(r.qid),
+  extra: r => S.topicC.has(r.qid) && S.topicS.has(r.qid),
+  recheck: r => !!(S.topicR && S.topicR.has(r.qid)),
+};
+const TPARTS = [['first', 'لأول مرة'], ['extra', 'موضوع زيادة مقترح من Claude'], ['recheck', 'محتاجة تتراجع بعد تعديل السؤال']];
+const tpartsOn = (v = S.view) => { const on = (Array.isArray(v && v.tparts) ? v.tparts : []).filter(k => TP[k]); return on.length ? on : TPARTS.map(x => x[0]); };
+// 6.0: the hidden reasons shown under "🙈 المخفي عن الطلاب" (always these four; a rarer one shows only while some question has it)
+const HID_MAIN = [['hidden_low_confidence', 'ثقة منخفضة'], ['hidden_disagree', 'مختلف مع المصدر'], ['hidden_incomplete', 'ناقص في المصدر'], ['hidden_answer_fix', 'المراجع طلب تغيير الإجابة']];
+const reasonLabel = k => (HID_MAIN.find(x => x[0] === k) || [])[1] || hiddenLabel(k);
+/* 6.0 (owner 9/10): what every folder, filter and card holds and what the reviewer does there, in plain words, behind a book
+   button; written for a beginner. "todo" = an action is asked of him; "free" = nothing is asked (shown in green). */
+const INFO = {
+  notappr: { what: 'كل سؤال لسه ماتعتمدش، أيًا كانت حالته: مستني مراجعة، أو مستني تعديل، أو اتعدّل ومستني اعتماد.', todo: 'افتحه وشوف هو واقف فين، وكمّل اللي عليك فيه.' },
+  untopic: { what: 'أسئلة مواضيعها لسه ماتأكدتش. الطلاب مابيشوفوش غير الموضوع المتأكد.', todo: 'لو ليها موضوع مقترح: افتح السؤال واضغط «✓ تأكيد». ولو مالهاش موضوع خالص: الإدارة بتشغّل محادثة التصنيف الأول.' },
+  todo: { what: 'كل الأسئلة اللي مستنية قرار مراجع: اللي لسه في المراجعة، واللي رجعت بعد التعديل.', todo: 'افتح السؤال، واعتمده لو تمام، أو اطلب تعديل.' },
+  new: { what: 'أسئلة في المراجعة انت لسه مافتحتهاش ولا مرة.', todo: 'ابدأ بيها، دي أول مرة تشوفها.' },
+  seen: { what: 'أسئلة فتحتها قبل كده، بس لسه مااعتمدتهاش ولا طلبت تعديلها.', todo: 'ارجعلها وخد فيها قرار.' },
+  drafts: { what: 'طلبات تعديل بدأت تكتبها ولسه مابعتّهاش. محفوظة على جهازك وعلى حسابك.', todo: 'افتحها وكمّل الطلب وابعته، أو امسح المسودة.' },
+  dups: { what: 'أسئلة شبه سؤال تاني في البنك بنسبة كبيرة.', todo: 'قارن السؤالين جنب بعض، وقرّر: مكرر ولا مش مكرر.' },
+  rebuild: { what: 'أسئلة لسه ماتحلّتش لأن فيها مشكلة بتمنع حلها، زي اختيارات ناقصة في الملف.', todo: 'اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل لوحدها. (لصاحب صلاحية التعديل السريع)' },
+  topicwait: { what: 'أسئلة مواضيعها محتاجة تأكيدك، وليها 3 أنواع:', list: ['<b>لأول مرة:</b> Claude اقترح موضوع، ولسه محدش أكّده.', '<b>موضوع زيادة مقترح من Claude:</b> المواضيع متأكدة، وClaude اقترح يضيف موضوع تاني.', '<b>محتاجة تتراجع بعد تعديل السؤال:</b> المواضيع اتأكدت، وبعدين السؤال نفسه اتعدّل.'],
+    todo: 'افتح السؤال واضغط «✓ تأكيد» (أو «✓ لسه مناسبة» لو اتعدّل بعد التأكيد) لو المواضيع مناسبة، أو «تغيير» وعدّلها. ولو السؤال لسه في المراجعة، اعتماده بيأكد مواضيعه لوحده.',
+    tip: 'لما تضغط المربع، الأنواع التلاتة بتنوّر تحته بأرقامها، وتقدر تشيل أي نوع مش عايزه.' },
+  notopic: { what: 'أسئلة مفيش ليها أي موضوع مقترح لسه.', free: 'مفيش مطلوب منك. الإدارة بتشغّل محادثة التصنيف، وبعدها بتنتقل لـ«مستنية تأكيدك». ولو حابب، تقدر تختار موضوع من صفحة السؤال بزرار «تغيير».' },
+  topicok: { what: 'أسئلة مواضيعها اتأكدت، وبتظهر للطلاب.', free: 'مفيش مطلوب منك. افتحها لو حابب تبص عليها تاني.' },
+  requested: { what: 'أسئلة اتطلب تعديلها، ومستنية Claude يعدّلها.', free: 'مفيش مطلوب منك دلوقتي. بعد التعديل بترجعلك في «تنتظرك».' },
+  revised: { what: 'أسئلة Claude عدّلها على حسب طلب التعديل.', todo: 'راجع التعديل، واعتمد السؤال أو اطلب تعديل تاني.' },
+  quick: { what: 'أسئلة مراجع عدّلها بالتعديل السريع.', todo: 'راجع التعديل، واعتمده أو اطلب تعديل.' },
+  approved: { what: 'أسئلة اتعتمدت.', free: 'مفيش مطلوب منك.' },
+  alerts: { what: 'أسئلة عليها ملاحظة «⚠️ للمراجع» من الاستخراج، زي: إجابة المصدر، أو سؤال ناقص، أو تصليح كتابة.', todo: 'اقرا التنبيه في صفحة السؤال قبل ما تقرر.' },
+  notes: { what: 'أسئلة عليها ملاحظة مكتوبة للطلاب: منشورة، أو مستنية الاعتماد، أو جوه طلب تعديل.', free: 'للاطلاع.' },
+  all: { what: 'كل الأسئلة في الشابتر اللي اخترته فوق.', free: 'للبحث والرجوع لأي سؤال.' },
+  topicre: { what: 'أسئلة مواضيعها اتأكدت، وبعدين السؤال نفسه اتعدّل.', todo: 'افتح السؤال، واضغط «✓ لسه مناسبة» أو «تغيير».' },
+  action: { name: '📋 المطلوب منك', what: 'كل الحاجات اللي مستنية منك إجراء، في كل الشباتر، في مكان واحد وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يفتحلك أسئلته على طول.' },
+  scope: { name: '📚 الشابتر', what: 'اختار شابتر، وكل الأرقام والقوايم اللي تحت بتمشي عليه. و«الكل» يعني كل الشباتر.', free: 'الشريطين بيقولولك الشابتر خلص قد إيه: الاعتماد، والمواضيع.' },
+  hidden: { name: '🙈 المخفي عن الطلاب', what: 'أسئلة مش ظاهرة للطلاب دلوقتي. لما تضغطه، أسباب الإخفاء بتنوّر تحته بأرقامها:', list: HID_MAIN.map(x => x[1]),
+    todo: 'شيل أي سبب مش عايزه، والقايمة بتتغير على طول. ولو في سبب نادر تاني (زي «بقرار الإدارة») بيظهر لوحده لما يبقى فيه أسئلة.' },
+  conf: { name: '🤖 ثقة Claude في حله', what: 'قد إيه Claude كان متأكد من الحل: عالية، أو متوسطة، أو منخفضة.', todo: 'اختار حاجة واحدة. الأقل ثقة أولى بالمراجعة.' },
+  src: { name: '📄 مقارنة بملف المصدر', what: '', list: ['<b>≠ مختلف مع المصدر:</b> حل Claude غير إجابة الملف، حتى لو اتعتمد وبقى ظاهر للطلاب.', '<b>◐ ناقص في المصدر:</b> السؤال كان ناقص في الملف، حتى لو اتكمّل واتعتمد.'], todo: 'ممكن تختار الاتنين مع بعض.' },
+};
+const BOOK = '<svg class="bk-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 6.5C10.3 5.2 7.9 4.6 4.5 4.8v13.3c3.4-.2 5.8.4 7.5 1.7 1.7-1.3 4.1-1.9 7.5-1.7V4.8c-3.4-.2-5.8.4-7.5 1.7z"/><path d="M12 6.5v13.3"/></svg>';
+const infoBtn = (k, name) => `<button class="info" type="button" data-info="${k}" aria-label="شرح: ${esc(name)}">${BOOK}</button>`;
 const SORTS = { priority: 'الأولوية (المختلف والأقل ثقة أولًا)', id_asc: 'رقم السؤال: تصاعدي', id_desc: 'رقم السؤال: تنازلي', conf_low: 'الثقة: الأقل أولًا', conf_high: 'الثقة: الأعلى أولًا' };
 const CONF_RANK = { low: 0, medium: 1, high: 2 };
 const VIEW_KEY = () => `view:${S.session?.user?.id}`;
 function loadView() {
   let v = {}; try { v = JSON.parse(localStorage.getItem(VIEW_KEY()) || '{}'); } catch { }
-  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all', topic: 'all', showFilters: false, ...v };
+  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hidOff: [], tparts: [], showFilters: false, ...v };
 }
 function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.view)); } catch { } }
 /* 4.1: two more list filters, in the interface only (integration_backlog 31, 32).
@@ -404,7 +452,7 @@ function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.vi
    32 – hidden from students: any student_state that starts with "hidden_", with a sub-filter per kind that exists now,
         so a new hidden kind shows up by itself.
    Counts next to each choice = questions in the open folder that pass the other filters. The "rebuild" folder ignores them. */
-const NO_FILTERS = { conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hiddenKind: 'all', topic: 'all' };
+const NO_FILTERS = { conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hidOff: [] };   // 6.0: hidden reasons are switched off one by one; no topic filter
 const VISIBLE_STATES = new Set(['ai', 'reviewed']);
 const isHidden = r => String(r.student_state || '').startsWith('hidden_');
 const HIDDEN_SHORT = { hidden_disagree: 'اختلاف مع المصدر', hidden_low_confidence: 'ثقة منخفضة', hidden_incomplete: 'ناقص', hidden_completed: 'اختياراته من المراجع', hidden_no_source: 'المصدر من غير إجابة', hidden_answer_fix: 'لحد تصليح الإجابة', hidden_admin: 'بقرار الإدارة', hidden_archived: 'مؤرشف' };
@@ -426,7 +474,13 @@ function fixView() {
   const v = S.view; if (!v) return;
   let changed = false;
   if (v.chapter && v.chapter !== 'all' && !chapterList().includes(v.chapter)) { v.chapter = 'all'; changed = true; }
-  if (v.hiddenKind && v.hiddenKind !== 'all' && !hiddenKinds().includes(v.hiddenKind)) { v.hiddenKind = 'all'; changed = true; }
+  // 6.0: views saved by 5.x: the topic filter is dropped (its states are folders now), "مواضيع تتراجع" is a part of "مستنية تأكيدك",
+  // one hidden reason picked becomes the others switched off, and a topic folder falls back when the server has no topic states
+  if (v.topic !== undefined) { delete v.topic; changed = true; }   // the folder stays as it was, without the old topic filter
+  if (v.hiddenKind !== undefined) { v.hidOff = v.hiddenKind && v.hiddenKind !== 'all' ? hiddenKinds().filter(k => k !== v.hiddenKind) : []; delete v.hiddenKind; changed = true; }
+  if (v.folder === 'topicre') { v.folder = 'topicwait'; v.tparts = ['recheck']; changed = true; }
+  if (!Array.isArray(v.hidOff)) { v.hidOff = []; changed = true; }
+  if (!FOLDERS.some(f => f.id === v.folder) || (!S.topicC && ['untopic', 'topicwait', 'notopic', 'topicok'].includes(v.folder))) { v.folder = 'todo'; changed = true; }
   if (changed) saveView();
 }
 function applyFilters(rows, view, skip) {
@@ -434,24 +488,99 @@ function applyFilters(rows, view, skip) {
   if (view.disagree) rows = rows.filter(r => r.match_status === 'disagree');
   if (view.incomplete) rows = rows.filter(r => r.is_incomplete);
   if (skip !== 'chapter' && view.chapter && view.chapter !== 'all') rows = rows.filter(r => r.chapter === view.chapter);
-  if (skip !== 'hidden' && view.hidden) rows = rows.filter(r => isHidden(r) && (!view.hiddenKind || view.hiddenKind === 'all' || r.student_state === view.hiddenKind));
-  if (skip !== 'topic' && view.topic && view.topic !== 'all' && S.topicC) {   // 5.3 (migration 048)
-    const t = view.topic;
-    rows = t === 'confirmed' ? rows.filter(r => S.topicC.has(r.qid))   // 5.8 (owner 8/10): the confirmed ones, for a second look
-      : rows.filter(r => !S.topicC.has(r.qid) && (t === 'pending' || (t === 'suggested' ? S.topicS.has(r.qid) : !S.topicS.has(r.qid))));
-  }
+  if (skip !== 'hidden' && view.hidden) { const off = new Set(view.hidOff || []); rows = rows.filter(r => isHidden(r) && !off.has(r.student_state)); }   // 6.0: every reason on, minus the ones switched off
   return rows;
 }
-/* 5.3: the folders as a grid in three groups (every folder visible, same-size tiles; a folder with work for you gets a
-   coloured count), and the filters as sections, each with one line saying exactly what it brings back. */
-const FOLDER_GROUPS = [['📌 الناقص', ['notappr', 'untopic']], ['شغلك', ['todo', 'new', 'seen', 'drafts', 'rebuild']], ['التعديلات', ['requested', 'revised', 'quick', 'notes', 'topicre']], ['الباقي', ['approved', 'alerts', 'dups', 'all']]];
-const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups', 'topicre', 'notappr', 'untopic']);
-const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات الطلاب' };   // shorter on the tile; the list title keeps the full name
+/* 5.3: the folders as a grid (every folder visible, same-size tiles; a folder with work for you gets a coloured count).
+   6.0 (owner 9/10): five groups named for what the reviewer does there, each with a one-line explanation; every tile has its
+   label on top, its count under it and a book button in its corner that explains it; the topic states live in one group. */
+const FOLDER_GROUPS = [
+  ['📌 لسه ناقص', 'اللي فاضل عشان الشابتر يكمل', ['notappr', 'untopic']],
+  ['✋ مستنية قرارك', 'أسئلة محتاجة منك اعتماد أو قرار', ['todo', 'new', 'seen', 'drafts', 'dups', 'rebuild']],
+  ['🏷️ تصنيف مواضيع', 'كل حاجة تخص المواضيع في مكان واحد', ['topicwait', 'notopic', 'topicok']],
+  ['✏️ التعديلات', 'أسئلة اتطلب تعديلها أو اتعدّلت', ['requested', 'revised', 'quick']],
+  ['📂 للاطلاع', 'للرجوع لأي سؤال', ['approved', 'alerts', 'notes', 'all']],
+];
+const TOPIC_FOLDERS = ['untopic', 'topicwait', 'notopic', 'topicok'];
+const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups', 'topicwait', 'notappr', 'untopic', 'revised', 'quick']);
+const DONE = new Set(['approved', 'topicok']);   // a green count: work that is finished
+const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات للطلاب', approved: 'معتمدة ✅' };   // shorter on the tile; the list title keeps the full name
+const folderName = id => TILE_LABEL[id] || (FOLDERS.find(f => f.id === id) || {}).label || '';
 function folderGrid(v, counts) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
-  return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, ids]) => {
-    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (f.id !== 'topicre' || S.topicR) && (f.id !== 'untopic' || S.topicC));   // 5.7: no tile before migration 062
-    return tiles.length ? `<div class="fg-h">${title}</div><div class="fg">${tiles.map(f => `<button class="ftile${counts[f.id] ? '' : ' zero'}${HOT.has(f.id) && counts[f.id] ? ' hot' : ''}" role="tab" aria-pressed="${v.folder === f.id}" data-folder="${f.id}"><span class="ft-l">${TILE_LABEL[f.id] || f.label}</span><span class="ft-n">${counts[f.id]}</span></button>`).join('')}</div>` : '';
+  const one = v.chapter && v.chapter !== 'all';
+  return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, sub, ids]) => {
+    const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (S.topicC || !TOPIC_FOLDERS.includes(f.id)));   // no topic tiles before migration 048
+    if (!tiles.length) return '';
+    const head = ids.includes('topicwait') ? `${title} ${one ? 'الشابتر' : 'الشباتر'}` : title;
+    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id);
+      return `<div class="ftile${n ? '' : ' zero'}${n && HOT.has(f.id) ? ' hot' : ''}${n && DONE.has(f.id) ? ' done' : ''}" data-on="${on}"><button class="ft-main" type="button" data-folder="${f.id}" aria-pressed="${on}"><span class="ft-l">${esc(name)}</span><span class="ft-n">${n}</span></button>${infoBtn(f.id, name)}</div>`; };
+    return `<section class="fgroup" aria-label="${esc(head)}"><div class="fg-h">${esc(head)}</div><p class="fg-s">${esc(sub)}</p><div class="fg">${tiles.map(tile).join('')}</div></section>`;
   }).join('')}</nav>`;
+}
+// 6.0: the three parts of "مستنية تأكيدك", lit when the folder opens, right above its list; each one switches off and on (never all off)
+function topicParts(v) {
+  const on = tpartsOn(v), rows = inScope(S.rows);
+  return `<div class="parts" role="group" aria-label="أنواع مستنية تأكيدك"><p class="parts-h">مستنية تأكيدك بسبب: (اضغط على أي نوع تشيله أو ترجّعه)</p><div class="fopts">${TPARTS.map(([k, l]) => {
+    const n = rows.filter(TP[k]).length, pressed = on.includes(k);
+    return `<button class="fopt" type="button" data-tpart="${k}" aria-pressed="${pressed}"${!n && !pressed ? ' disabled' : ''}><span class="fo-l">${esc(l)}</span><span class="fo-n">${n}</span></button>`;
+  }).join('')}</div></div>`;
+}
+/* 6.0 (owner 9/10): "📋 المطلوب منك": everything that waits for an action from this reviewer, in every chapter, one row each;
+   a row opens its folder on every chapter with no filter, so the list matches the number he saw. */
+const ACTS = [['✋', 'todo', 'أسئلة تنتظر قرارك', 'اعتماد أو طلب تعديل'], ['📝', 'drafts', 'مسودات لم تُرسل', 'كمّلها وابعتها'], ['🔁', 'dups', 'محتمل مكرر', 'قرّر: مكرر ولا لأ'],
+  ['🛠️', 'rebuild', 'إعادة تركيب', 'اكتب السؤال من مرجع موثوق'], ['🏷️', 'topicwait', 'مواضيع مستنية تأكيدك', 'أكّدها أو غيّرها']];
+function actionCounts() {
+  return ACTS.map(([ic, id, t, sub]) => {
+    const f = FOLDERS.find(x => x.id === id);
+    const n = id === 'rebuild' ? (S.rebuild || []).length : id === 'topicwait' && !S.topicC ? 0 : S.rows.filter(f.test).length;
+    return { ic, id, t, sub, n };
+  }).filter(a => a.n);
+}
+function todoButton() {
+  const acts = actionCounts(), total = acts.reduce((a, x) => a + x.n, 0);
+  return `<div class="todo-row"><button class="todo-btn${total ? '' : ' none'}" type="button" id="todo-open"><span class="ic" aria-hidden="true">${total ? '📋' : '✅'}</span><span class="grow"><b>المطلوب منك</b><span class="sub">${total ? 'اضغط تشوف كل اللي محتاج منك إجراء' : 'مفيش حاجة مطلوبة منك دلوقتي بفضل الله'}</span></span>${total ? `<span class="big-n" aria-label="${total} إجراء">${total}</span>` : ''}</button>${infoBtn('action', 'المطلوب منك')}</div>`;
+}
+// open a folder from anywhere (the actions sheet, the admin panel, the chapter summary): optional parts, chapter and a clean filter
+function goFolder(folder, { parts, chapter = 'all', clear = true } = {}) {
+  S.view = { ...S.view, ...(clear ? NO_FILTERS : {}), folder, chapter: chapter && chapter !== 'all' && chapterList().includes(chapter) ? chapter : 'all', tparts: parts || [] };
+  saveView(); S.listLimit = 60; closeSheets(); renderQueue(); toList();
+}
+// 6.0: the list sits under the folder groups, so opening a folder slides the page down to it (and "⬆ الفولدرات" goes back)
+function toList() {
+  const t = document.querySelector('.f-lead') || document.querySelector('.rb-lead') || document.querySelector('.qhead');
+  if (t) t.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+function openActions() {
+  const acts = actionCounts();
+  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📋 المطلوب منك</h2><p class="hint" style="margin-top:4px">في كل الشباتر. اضغط أي سطر يفتحلك أسئلته.</p></div>
+    ${acts.length ? acts.map(a => `<button class="act" type="button" data-act="${a.id}"><span class="ic" aria-hidden="true">${a.ic}</span><span class="grow"><b>${esc(a.t)}</b><span class="s">${esc(a.sub)}</span></span><span class="n">${a.n}</span><span class="go">افتح ←</span></button>`).join('')
+      : '<div class="ex-blk free">✅ مفيش حاجة مطلوبة منك دلوقتي بفضل الله.</div>'}
+    <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
+  sheet.querySelector('[data-close]').onclick = () => close();
+  sheet.querySelectorAll('[data-act]').forEach(b => b.onclick = () => goFolder(b.dataset.act));
+}
+// the book button: what a folder, filter or card holds, and what is asked of the reviewer there
+function explain(k) {
+  const f = INFO[k]; if (!f) return;
+  const isFolder = FOLDERS.some(x => x.id === k), name = f.name || folderName(k);
+  const list = f.list ? `<ul>${f.list.map(x => `<li>${x}</li>`).join('')}</ul>` : '';   // fixed text from INFO (bold marks only)
+  const { sheet, close } = openSheet(`<div class="sheet-head ex-h"><span class="ex-bk" aria-hidden="true">${BOOK}</span><h2>${esc(name)}</h2></div>
+    ${f.what || list ? `<div class="ex-blk"><span class="ex-k">فيه إيه؟</span>${esc(f.what)}${list}</div>` : ''}
+    ${f.todo ? `<div class="ex-blk do"><span class="ex-k">المطلوب منك</span>${esc(f.todo)}</div>` : ''}
+    ${f.free ? `<div class="ex-blk free"><span class="ex-k">المطلوب منك</span>${esc(f.free)}</div>` : ''}
+    ${f.tip ? `<div class="ex-blk"><span class="ex-k">💡 معلومة</span>${esc(f.tip)}</div>` : ''}
+    <div class="foot ex-foot">${isFolder ? `<button class="btn primary" type="button" data-open="${k}">افتح «${esc(name)}»</button>` : ''}<button class="btn" type="button" data-close>تمام</button></div>`);
+  sheet.querySelector('[data-close]').onclick = () => close();
+  const o = sheet.querySelector('[data-open]'); if (o) o.onclick = () => goFolder(k, { chapter: S.view.chapter, clear: false });
+}
+// every explanation on one page, for whoever likes to read it once
+function guideAll() {
+  const row = k => { const f = INFO[k]; return `<div class="gl"><b>${esc(f.name || folderName(k))}</b><span>${esc(f.what)}${f.list ? ' ' + f.list.map(x => x.replace(/<[^>]+>/g, '')).join(' · ') : ''} ${esc(f.todo || f.free || '')}</span></div>`; };
+  const groups = FOLDER_GROUPS.map(([h, , ids]) => { const ok = ids.filter(id => S.topicC || !TOPIC_FOLDERS.includes(id)); return ok.length ? `<div class="gl-g">${esc(ids.includes('topicwait') ? h + ' الشباتر' : h)}</div>${ok.map(row).join('')}` : ''; }).join('');
+  const { sheet, close } = openSheet(`<div class="sheet-head ex-h"><span class="ex-bk" aria-hidden="true">${BOOK}</span><h2>شرح كل الفولدرات والفلاتر</h2></div>
+    ${groups}<div class="gl-g">🔍 التصفية</div>${['hidden', 'conf', 'src'].map(row).join('')}<div class="gl-g">فوق الصفحة</div>${['action', 'scope'].map(row).join('')}
+    <div class="foot"><button class="btn" type="button" data-close>تمام</button></div>`);
+  sheet.querySelector('[data-close]').onclick = () => close();
 }
 /* 5.9 (owner 8/10): "📚 الشابتر" above the folders: same-size choices (the long name ends with … and shows whole on hold),
    then where the chosen chapter stands: approved and confirmed topics, and a green line once both are full. */
@@ -463,7 +592,7 @@ function scopeCard(v) {
   const done = total > 0 && appr === total && (conf === null || conf === total) && !re;
   const chip = (k, label, cnt) => `<button class="scope" type="button" data-scope="${esc(k)}" aria-pressed="${cur === k}" title="${esc(label)}"><span class="sc-l" dir="auto">${esc(label)}</span><span class="sc-n">${cnt} سؤال</span></button>`;
   return `<section class="scard" aria-label="الشابتر">
-    <div class="sc-head"><h2>📚 الشابتر</h2><button class="linkbtn small" type="button" id="chsum">📊 كل الشباتر</button></div>
+    <div class="sc-head"><h2>📚 الشابتر</h2><span class="grow"></span><button class="linkbtn small" type="button" id="chsum">📊 كل الشباتر</button>${infoBtn('scope', 'الشابتر')}</div>
     <div class="scopes" id="scopes" role="group" aria-label="اختار الشابتر">${chip('all', 'الكل', S.rows.length)}${chs.map(c => chip(c, c, n[c])).join('')}</div>
     <div class="sc-prog">${progBar('الاعتماد', appr, total, 'a')}${conf === null ? '' : progBar('المواضيع', conf, total, 't')}</div>
     ${done ? `<div class="sc-done">✅ ${cur === 'all' ? 'كل الشباتر اكتملت' : 'الشابتر اكتمل'} بفضل الله: الأسئلة كلها معتمدة، ومواضيعها متأكدة.</div>` : ''}
@@ -473,59 +602,42 @@ function scopeCard(v) {
 const FHINT_KEY = 'ooc-review-fhint';
 const fhintDone = () => { if (S.fhint) return true; try { return localStorage.getItem(FHINT_KEY) === '1'; } catch (e) { return false; } };
 const fhintSeen = () => { S.fhint = true; try { localStorage.setItem(FHINT_KEY, '1'); } catch (e) { /* storage blocked: hidden for this visit only */ } };
-function filtersPanel(v, fx) {
-  const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
-  const n = patch => applyFilters(inFolder, { ...v, ...patch }).length;
-  const tog = (id, on, label, cnt, help) => `<div class="frow"><button class="chip" aria-pressed="${on}" id="${id}">${label}<span class="n">${cnt}</span></button><p class="fhelp">${help}</p></div>`;
-  let topic = '';
-  if (S.topicC) {
-    const pend = ['pending', 'suggested', 'none'].includes(v.topic);
-    const all = applyFilters(inFolder, v, 'topic'), base = all.filter(r => !S.topicC.has(r.qid));
-    const sug = base.filter(r => S.topicS.has(r.qid)).length;
-    topic = `<div class="frow"><button class="chip" aria-pressed="${pend}" data-topic="${pend ? 'all' : 'pending'}">🏷️ منتظر التصنيف<span class="n">${base.length}</span></button><p class="fhelp">موضوعه لسه ماتأكدش. المقترح بيتأكد بزرار "✓ تأكيد" في صفحة السؤال، أو مع الاعتماد.</p></div>
-      ${pend ? `<div class="chips sub"><button class="chip" aria-pressed="${v.topic === 'suggested'}" data-topic="suggested">مقترح<span class="n">${sug}</span></button><button class="chip" aria-pressed="${v.topic === 'none'}" data-topic="none">مالوش موضوع<span class="n">${base.length - sug}</span></button></div>` : ''}
-      <div class="frow"><button class="chip" aria-pressed="${v.topic === 'confirmed'}" data-topic="${v.topic === 'confirmed' ? 'all' : 'confirmed'}">✅ مواضيعه متأكدة<span class="n">${all.length - base.length}</span></button><p class="fhelp">موضوعه اتأكد وبيظهر للطلاب، علشان لو حابب تبص عليها تاني.</p></div>`;
-  }
+/* 6.0 (owner 9/10): the filters for a beginner: a first line says where they search, then three sections, each with a book
+   button: hidden from students first (its reasons light up under it, each one switched off on its own), Claude's confidence,
+   and the comparison with the source file. Every choice is a same-size box with its count; a box at 0 is dim and can't be pressed. */
+function filtersPanel(v) {
+  const base = listFor({ ...v, ...NO_FILTERS, chapter: v.chapter, hidOff: [] });   // the open folder in the chosen chapter, before any filter
+  const n = patch => applyFilters(base, { ...v, ...patch }).length;
+  const opt = (attr, val, label, cnt, on, wide) => `<button class="fopt${wide ? ' wide' : ''}" type="button" ${attr}="${esc(val)}" aria-pressed="${!!on}"${!cnt && !on ? ' disabled' : ''}><span class="fo-l">${label}</span><span class="fo-n">${cnt}</span></button>`;
+  const head = (k, help) => `<div class="fs-h"><h3>${esc(INFO[k].name)}</h3>${infoBtn(k, INFO[k].name)}</div><p class="fhelp">${help}</p>`;
+  const hid = applyFilters(base, { ...v, hidden: false }).filter(isHidden), hN = countBy(hid, r => r.student_state), off = new Set(v.hidOff || []);
+  const kinds = [...HID_MAIN.map(x => x[0]), ...hiddenKinds().filter(k => !HID_MAIN.some(x => x[0] === k))];
+  const reasons = v.hidden ? `<div class="parts" role="group" aria-label="أسباب الإخفاء"><p class="parts-h">مخفي بسبب: (اضغط على أي سبب تشيله أو ترجّعه)</p><div class="fopts">${kinds.map(k => opt('data-hid', k, esc(reasonLabel(k)), hN[k] || 0, !off.has(k) && (hN[k] || 0) > 0)).join('')}</div></div>` : '';
+  const where = `🔍 بتدوّر جوه: <b>«${esc(folderName(v.folder))}»</b> ${v.chapter && v.chapter !== 'all' ? `في <bdi>${esc(v.chapter)}</bdi>` : 'في كل الشباتر'} – <b>${base.length} سؤال</b>`;
   return `<div class="filters">
-    <div class="fsec"><div class="fsec-h">🤖 ثقة Claude</div><p class="fhelp">قد إيه Claude كان متأكد من حله.</p>
-      <div class="chips" style="padding-bottom:4px">${[['all', 'الكل'], ['high', 'عالية'], ['medium', 'متوسطة'], ['low', 'منخفضة']].map(([k, l]) => `<button class="chip" aria-pressed="${v.conf === k}" data-conf="${k}">${l}</button>`).join('')}</div></div>
-    ${fx.ch}
-    <div class="fsec"><div class="fsec-h">🔎 حالة السؤال</div><p class="fhelp">بتدوّر في كل الأسئلة: الظاهرة للطلاب والمخفية.</p>
-      ${tog('f-dis', v.disagree, '≠ كل المختلف مع المصدر', v.disagree ? n({}) : n({ disagree: true }), 'حل Claude فيه غير إجابة الملف، حتى لو اتعتمد وبقى ظاهر للطلاب.')}
-      ${tog('f-inc', v.incomplete, '◐ كل الناقص', v.incomplete ? n({}) : n({ incomplete: true }), 'السؤال كان ناقص في الملف، حتى لو اتكمّل واتعتمد.')}
-      ${topic}</div>
-    <div class="fsec"><div class="fsec-h">👁️ الظهور للطلاب</div>
-      ${tog('f-hid', !!v.hidden, '🙈 المخفي عن الطلاب', v.hidden ? n({ hiddenKind: 'all' }) : n({ hidden: true, hiddenKind: 'all' }), 'أسئلة مش ظاهرة للطلاب دلوقتي. الأسباب بتظهر تحته لما تختاره.')}
-      ${fx.hid}</div>
+    <div class="where">${where}</div>
+    <div class="fsec">${head('hidden', 'اضغطه، وأسباب الإخفاء تنوّر تحته بأرقامها.')}<div class="fopts">${opt('data-fhid', '1', '🙈 المخفي عن الطلاب', hid.length, !!v.hidden, true)}</div>${reasons}</div>
+    <div class="fsec">${head('conf', 'اختار حاجة واحدة.')}<div class="fopts">${[['all', 'الكل'], ['high', 'عالية'], ['medium', 'متوسطة'], ['low', 'منخفضة']].map(([k, l]) => opt('data-conf', k, l, n({ conf: k }), v.conf === k)).join('')}</div></div>
+    <div class="fsec">${head('src', 'ممكن تختار الاتنين مع بعض.')}<div class="fopts">${opt('data-src', 'disagree', '≠ مختلف مع المصدر', v.disagree ? n({}) : n({ disagree: true }), v.disagree)}${opt('data-src', 'incomplete', '◐ ناقص في المصدر', v.incomplete ? n({}) : n({ incomplete: true }), v.incomplete)}</div></div>
+    <button class="btn block fclear" type="button" data-fclear>مسح التصفية</button>
   </div>`;
 }
 // the active filters, always visible above the list, each with its own ✕
 function activeLine(v) {
   const it = [];
   const x = (label, patch) => it.push(`<button class="achip" type="button" data-unset='${esc(JSON.stringify(patch))}' aria-label="شيل ${esc(label)}">${esc(label)} ✕</button>`);
+  if (v.hidden) x((v.hidOff || []).length ? 'المخفي (بعض الأسباب)' : 'المخفي عن الطلاب', { hidden: false, hidOff: [] });
   if (v.conf !== 'all') x(`ثقة ${({ high: 'عالية', medium: 'متوسطة', low: 'منخفضة' })[v.conf] || v.conf}`, { conf: 'all' });
-  if (v.disagree) x('كل المختلف', { disagree: false });
-  if (v.incomplete) x('كل الناقص', { incomplete: false });
-  if (S.topicC && v.topic && v.topic !== 'all') x(v.topic === 'suggested' ? 'موضوع مقترح' : v.topic === 'none' ? 'مالوش موضوع' : v.topic === 'confirmed' ? 'مواضيعه متأكدة' : 'منتظر التصنيف', { topic: 'all' });
-  if (v.hidden) x(v.hiddenKind && v.hiddenKind !== 'all' ? `مخفي: ${hiddenLabel(v.hiddenKind)}` : 'المخفي', { hidden: false, hiddenKind: 'all' });
-  return `<div class="aline"><span class="small muted">التصفية:</span>${it.join('')}<button class="linkbtn small" id="f-clear">مسح الكل</button></div>`;
-}
-function facetHTML(v) {
-  const f = FOLDERS.find(x => x.id === v.folder) || FOLDERS[0], inFolder = S.rows.filter(f.test);
-  const chip = (attr, k, label, n, on) => `<button class="chip" aria-pressed="${on}" ${attr}="${esc(k)}"><bdi>${esc(label)}</bdi><span class="n">${n}</span></button>`;
-  const ch = '';   // 5.9: the chapter is chosen in "📚 الشابتر" above the folders
-  let hid = '';
-  if (v.hidden) {
-    const hRows = applyFilters(inFolder, v, 'hidden').filter(isHidden), hN = countBy(hRows, r => r.student_state), hk = v.hiddenKind || 'all';
-    hid = `<div class="chips sub" aria-label="سبب الإخفاء">${hiddenKinds().map(k => chip('data-hkind', k, hiddenLabel(k), hN[k] || 0, hk === k)).join('')}</div>
-      <p class="fhelp">${hk !== 'all' && STUDENT_STATE[hk] ? esc(STUDENT_STATE[hk][0].replace(/<[^>]+>/g, '')) + '. دوس عليه تاني علشان ترجع لكل المخفي.' : 'كل المخفي ظاهر دلوقتي. اختار سبب علشان تشوف أسئلته بس.'}</p>`;
-  }
-  return { ch, hid };
+  if (v.disagree) x('مختلف مع المصدر', { disagree: false });
+  if (v.incomplete) x('ناقص في المصدر', { incomplete: false });
+  return `<div class="aline"><span class="small muted">التصفية:</span>${it.join('')}<button class="linkbtn small" id="f-clear" data-fclear>مسح الكل</button></div>`;
 }
 function listFor(view = S.view) {
   if (view.folder === 'rebuild') return inScope([...(S.rebuild || [])], view);   // already ordered by number; sorting and filters do not apply (5.9: the chapter does)
   const f = FOLDERS.find(x => x.id === view.folder) || FOLDERS[0];
-  let rows = applyFilters(S.rows.filter(f.test), view);
+  let rows = S.rows.filter(f.test);
+  if (f.id === 'topicwait') { const on = tpartsOn(view); rows = rows.filter(r => on.some(k => TP[k](r))); }   // 6.0: the parts left on
+  rows = applyFilters(rows, view);
   const cr = r => CONF_RANK[r.ai_confidence] ?? 1;
   const by = {
     priority: (a, b) => a.priority - b.priority || a.qid - b.qid,
@@ -652,13 +764,11 @@ function reasonTags(r, showStatus) {
   else if (r.open_requests) t.push('<span class="tag amber">طلب من مراجع آخر</span>');
   return t.join('');
 }
-// 5.9: a line above the list of the two "missing" folders and of "مواضيع تتراجع", and what an empty one says
-const FOLDER_LEAD = {
-  notappr: 'أسئلة لسه ماتعتمدتش، أيًا كانت حالتها: مستنية مراجعة، أو تعديل، أو اعتماد بعد التعديل.',
-  untopic: 'أسئلة مواضيعها لسه ماتأكدتش، والطلاب مابيشوفوش غير المتأكد. افتح السؤال واضغط "✓ تأكيد" لو المواضيع مناسبة، أو "تغيير".',
-  topicre: 'أسئلة اتعدّلت بعد ما مواضيعها اتأكدت. افتح كل سؤال وشوف مواضيعه لسه مناسبة ولا محتاجة تتغير.',
-};
-const FOLDER_EMPTY = { notappr: 'كل الأسئلة هنا معتمدة بفضل الله.', untopic: 'كل الأسئلة هنا مواضيعها متأكدة بفضل الله.', topicre: 'مفيش أسئلة مواضيعها محتاجة مراجعة.' };
+// 6.0: a line above every list says what the folder holds (from INFO), and an empty folder says why it is empty
+const LEAD = { topicwait: 'أسئلة مواضيعها محتاجة تأكيدك. الأنواع اللي فوق بتقولك ليه، وتقدر تشيل أي نوع.' };
+const leadOf = id => LEAD[id] || (INFO[id] && INFO[id].what) || '';
+const FOLDER_EMPTY = { notappr: 'كل الأسئلة هنا معتمدة بفضل الله.', untopic: 'كل الأسئلة هنا مواضيعها متأكدة بفضل الله.', topicre: 'مفيش أسئلة مواضيعها محتاجة مراجعة.',
+  topicwait: 'مفيش مواضيع مستنية تأكيدك بفضل الله.', notopic: 'كل الأسئلة هنا ليها مواضيع مقترحة أو متأكدة.', topicok: 'لسه مفيش أسئلة مواضيعها متأكدة هنا.' };
 // the chosen chapter stays in sight in its row, and the row fades at the side that has more (5.9)
 function centerScope() {
   const sc = document.getElementById('scopes'); if (!sc) return;
@@ -674,8 +784,7 @@ function renderQueue() {
   const counts = Object.fromEntries(FOLDERS.map(f => [f.id, scoped.filter(f.test).length]));
   counts.rebuild = inScope(S.rebuild || []).length;
   const isRb = v.folder === 'rebuild';
-  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + !!v.hidden + (!!S.topicC && (v.topic || 'all') !== 'all');
-  const fx = !isRb && v.showFilters ? facetHTML(v) : { ch: '', hid: '' };
+  const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + !!v.hidden;   // 6.0: no topic filter (its states are folders)
   const shown = list.slice(0, S.listLimit || 60);
   const items = isRb ? shown.map(rbItem).join('') : shown.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
@@ -684,19 +793,22 @@ function renderQueue() {
   $app.innerHTML = topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span>${installBtn()}<span class="small muted who">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`) + `
   <main class="wrap">
     ${staffCard()}
+    ${todoButton()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
     ${scopeCard(v)}
     ${folderGrid(v, counts)}
-    ${FOLDER_LEAD[v.folder] ? `<p class="hint rb-lead">${FOLDER_LEAD[v.folder]}</p>` : ''}
+    <button class="guide-all" type="button" id="guide-all">${BOOK}<span>اقرا شرح كل الفولدرات والفلاتر مرة واحدة</span></button>
+    ${!isRb && leadOf(v.folder) ? `<p class="hint rb-lead f-lead">${esc(leadOf(v.folder))}</p>` : ''}
+    ${v.folder === 'topicwait' && S.topicC ? topicParts(v) : ''}
     ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <button class="btn${activeFilters ? ' f-on' : ''}" id="tog-f" aria-expanded="${v.showFilters}">🔍 تصفية${activeFilters ? ` (${activeFilters})` : ''} <span aria-hidden="true">${v.showFilters ? '▴' : '▾'}</span></button>
+      <button class="btn${activeFilters ? ' f-on' : ''}" id="tog-f" aria-expanded="${v.showFilters}">🔍 تصفية القايمة${activeFilters ? ` (${activeFilters})` : ''} <span aria-hidden="true">${v.showFilters ? '▴' : '▾'}</span></button>
     </div>
-    ${!v.showFilters && !fhintDone() ? `<p class="hint fhint" id="fhint"><span>🔍 <b>تصفية</b>: جوّه الشابتر اللي فوق، اختار حسب ثقة Claude، أو الاختلاف مع المصدر، أو المخفي، أو حالة الموضوع.</span><button class="linkbtn quiet" type="button" id="fhint-x" aria-label="إخفاء الشرح">✕</button></p>` : ''}
-    ${v.showFilters ? filtersPanel(v, fx) : ''}`}
+    ${!v.showFilters && !fhintDone() ? `<p class="hint fhint" id="fhint"><span>🔍 <b>تصفية القايمة</b>: جوّه الفولدر اللي فاتحه، اختار المخفي عن الطلاب وأسبابه، أو ثقة Claude، أو المقارنة بملف المصدر.</span><button class="linkbtn quiet" type="button" id="fhint-x" aria-label="إخفاء الشرح">✕</button></p>` : ''}
+    ${v.showFilters ? filtersPanel(v) : ''}`}
     ${activeFilters ? activeLine(v) : ''}
-    <div class="qhead"><h2>${esc(FOLDERS.find(f => f.id === v.folder)?.label || '')}</h2><span class="count">${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
+    <div class="qhead"><h2>${esc(folderName(v.folder))}</h2><span class="count"><button class="linkbtn small" type="button" id="to-folders">⬆ الفولدرات</button> ${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
       : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : !activeFilters && FOLDER_EMPTY[v.folder] ? FOLDER_EMPTY[v.folder] : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
@@ -709,20 +821,38 @@ function renderQueue() {
   const mq = document.getElementById('more-q'); if (mq) mq.onclick = () => { S.listLimit = (S.listLimit || 60) + 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
   bindFooter();
   const set = patch => { Object.assign(S.view, patch); saveView(); S.listLimit = 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
-  $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => set({ folder: b.dataset.folder }));
+  // 6.0: a tile opens its folder (a topic folder with every part on) and slides down to its list
+  $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => {
+    if (b.dataset.folder !== v.folder) { Object.assign(S.view, { folder: b.dataset.folder, tparts: [] }); saveView(); S.listLimit = 60; renderQueue(); }
+    toList();
+  });
+  const tf2 = document.getElementById('to-folders'); if (tf2) tf2.onclick = () => document.querySelector('.fgrid')?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   $app.querySelectorAll('[data-conf]').forEach(b => b.onclick = () => set({ conf: b.dataset.conf }));
   const so = document.getElementById('sort'); if (so) so.onchange = e => set({ sort: e.target.value });
   const tf = document.getElementById('tog-f'); if (tf) tf.onclick = () => { fhintSeen(); set({ showFilters: !v.showFilters }); };
   const fx2 = document.getElementById('fhint-x'); if (fx2) fx2.onclick = () => { fhintSeen(); document.getElementById('fhint')?.remove(); };
-  const fd = document.getElementById('f-dis'); if (fd) fd.onclick = () => set({ disagree: !v.disagree });
-  const fi = document.getElementById('f-inc'); if (fi) fi.onclick = () => set({ incomplete: !v.incomplete });
-  const fh = document.getElementById('f-hid'); if (fh) fh.onclick = () => set({ hidden: !v.hidden, hiddenKind: 'all' });
-  $app.querySelectorAll('[data-chapter]').forEach(b => b.onclick = () => set({ chapter: b.dataset.chapter }));
-  $app.querySelectorAll('[data-hkind]').forEach(b => b.onclick = () => set({ hiddenKind: b.dataset.hkind === v.hiddenKind ? 'all' : b.dataset.hkind }));   // 5.3: tap again = all hidden
-  const fc = document.getElementById('f-clear'); if (fc) fc.onclick = () => set({ ...NO_FILTERS, chapter: v.chapter });   // 5.9: the chapter stays
+  // 6.0: the filter boxes; hidden reasons and topic parts switch off one by one, and one always stays on
+  $app.querySelectorAll('[data-src]').forEach(b => b.onclick = () => set({ [b.dataset.src]: !v[b.dataset.src] }));
+  $app.querySelectorAll('[data-fhid]').forEach(b => b.onclick = () => set({ hidden: !v.hidden, hidOff: [] }));
+  $app.querySelectorAll('[data-hid]').forEach(b => b.onclick = () => {
+    const k = b.dataset.hid, off = new Set(v.hidOff || []);
+    if (b.getAttribute('aria-pressed') === 'true') {
+      if (!$app.querySelector(`[data-hid][aria-pressed="true"]:not([data-hid="${k}"])`)) return toast('لازم يفضل سبب واحد على الأقل.');
+      off.add(k);
+    } else off.delete(k);
+    set({ hidOff: [...off] });
+  });
+  $app.querySelectorAll('[data-tpart]').forEach(b => b.onclick = () => {
+    const k = b.dataset.tpart, on = new Set(tpartsOn(v));
+    if (on.has(k)) { if (on.size === 1) return toast('لازم يفضل نوع واحد على الأقل.'); on.delete(k); } else on.add(k);
+    set({ tparts: on.size === TPARTS.length ? [] : [...on] });
+  });
+  $app.querySelectorAll('[data-fclear]').forEach(b => b.onclick = () => set({ ...NO_FILTERS, chapter: v.chapter }));   // 5.9: the chapter stays
+  $app.querySelectorAll('[data-info]').forEach(b => b.onclick = () => explain(b.dataset.info));
+  const ta = document.getElementById('todo-open'); if (ta) ta.onclick = openActions;
+  const ga = document.getElementById('guide-all'); if (ga) ga.onclick = guideAll;
   $app.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => set({ chapter: b.dataset.scope }));
   centerScope();
-  $app.querySelectorAll('[data-topic]').forEach(b => b.onclick = () => set({ topic: b.dataset.topic === v.topic && b.dataset.topic !== 'pending' ? 'pending' : b.dataset.topic === v.topic ? 'all' : b.dataset.topic }));
   $app.querySelectorAll('[data-unset]').forEach(b => b.onclick = () => set(JSON.parse(b.dataset.unset)));
   document.getElementById('goto').onsubmit = ev => {
     ev.preventDefault();
@@ -748,9 +878,9 @@ function renderQueue() {
   $app.querySelectorAll('[data-delrun]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.delrun)); if (c) deleteChapter(c); });
   $app.querySelectorAll('[data-link]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.link)); if (c) openDriveLink(c); });
   $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
-  $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => { Object.assign(S.view, { folder: b.dataset.gofolder }); saveView(); S.listLimit = 60; renderQueue(); const c = document.querySelector('.fgrid') || document.querySelector('.chips'); if (c) c.scrollIntoView({ block: 'start' }); });
+  // 6.0: the admin panel's buttons open a folder on every chapter with no filter (a part of "مستنية تأكيدك" when named), so the list matches its count
+  $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => goFolder(b.dataset.gofolder, { parts: b.dataset.parts ? b.dataset.parts.split(',') : undefined }));
   const cs = document.getElementById('chsum'); if (cs) cs.onclick = openChapterSummary;
-  $app.querySelectorAll('[data-gotopic]').forEach(b => b.onclick = () => goTopics(b.dataset.gotopic, null));
   bindInstall();
   const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
   if (S.isAdmin && S.pipeline) loadSolver();
@@ -2654,12 +2784,6 @@ function chapterSummary() {
   }
   return [...by.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 }
-// the list, opened on one topic state ("pending" = not confirmed yet, or "confirmed"), in one chapter when the chapter filter has it
-function goTopics(topic, ch) {
-  S.view = { ...S.view, ...NO_FILTERS, folder: 'all', topic, chapter: ch && chapterList().includes(ch) ? ch : 'all' };
-  saveView(); S.listLimit = 60; renderQueue();
-  const h = document.querySelector('.aline') || document.querySelector('.qhead'); if (h) h.scrollIntoView({ block: 'start' });
-}
 function openChapterSummary() {
   const bar = progBar;
   const rows = chapterSummary().map(g => {
@@ -2667,7 +2791,7 @@ function openChapterSummary() {
     return `<div class="cs-row${done ? ' done' : ''}">
       <div class="cs-h"><b><bdi>${esc(g.name)}</bdi></b> <span class="small muted">${g.total} سؤال</span>${done ? ' <span class="tag ok">✅ اكتمل بفضل الله</span>' : ''}</div>
       <div class="cs-bars">${bar('الاعتماد', g.approved, g.total, 'a')}${bar('المواضيع', g.conf, g.total, 't')}</div>
-      <div class="cs-act">${wait ? `<button class="linkbtn" type="button" data-cs="pending" data-ch="${esc(g.name)}">مستني تأكيد (${wait})</button>` : ''}${g.conf ? `<button class="linkbtn" type="button" data-cs="confirmed" data-ch="${esc(g.name)}">المتأكدة (${g.conf})</button>` : ''}${g.re ? `<button class="linkbtn" type="button" data-cs="topicre">في "مواضيع تتراجع" (${g.re})</button>` : ''}</div>
+      <div class="cs-act">${wait ? `<button class="linkbtn" type="button" data-cs="untopic" data-ch="${esc(g.name)}">لم تتأكد مواضيعها (${wait})</button>` : ''}${g.conf ? `<button class="linkbtn" type="button" data-cs="topicok" data-ch="${esc(g.name)}">مواضيعها متأكدة (${g.conf})</button>` : ''}${g.re ? `<button class="linkbtn" type="button" data-cs="topicwait" data-ch="${esc(g.name)}" data-parts="recheck">محتاجة تتراجع بعد تعديل السؤال (${g.re})</button>` : ''}</div>
     </div>`;
   }).join('');
   const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📊 ملخص الشباتر</h2>
@@ -2675,12 +2799,10 @@ function openChapterSummary() {
     <div class="csum">${rows || '<p class="small muted">مفيش أسئلة لسه.</p>'}</div>
     <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
   sheet.querySelector('[data-close]').onclick = () => close();
+  // 6.0: each line opens its topic folder in that chapter
   sheet.querySelectorAll('[data-cs]').forEach(b => b.onclick = () => {
-    const t = b.dataset.cs, ch = b.dataset.ch; close();
-    setTimeout(() => {
-      if (t === 'topicre') { S.view = { ...S.view, ...NO_FILTERS, folder: 'topicre' }; saveView(); S.listLimit = 60; renderQueue(); document.querySelector('.qhead')?.scrollIntoView({ block: 'start' }); }
-      else goTopics(t, ch);
-    }, 200);
+    const t = b.dataset.cs, ch = b.dataset.ch, parts = b.dataset.parts ? b.dataset.parts.split(',') : undefined; close();
+    setTimeout(() => goFolder(t, { chapter: ch, parts }), 200);
   });
 }
 
@@ -2764,8 +2886,8 @@ function chapterCard(c) {
       return { id: 'topics', name: 'مواضيع', work, left,
         wait: !work && left ? (solveN ? 'بعد الحل' : reviewN || revN ? 'بعد المراجعة والتعديلات' : '') : '',
         text: n('total') ? [`${n('topics_confirmed')} متأكد من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '',
-          pc ? `${pc} متأكد وعليه اقتراح زيادة` : '', re ? `${re} في "مواضيع تتراجع"` : ''].filter(Boolean).join(' · ') : 'بعد الاستخراج والحل',
-        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${wait ? `<button class="btn${none ? ' sec' : ' primary'}" type="button" data-gotopic="pending">افتح المستني (${wait})</button>` : ''}${re ? '<button class="btn sec" type="button" data-gofolder="topicre">افتح "مواضيع تتراجع"</button>' : ''}${chs}` : '' };
+          pc ? `${pc} متأكد وعليه اقتراح زيادة` : '', re ? `${re} محتاجة تتراجع بعد تعديل السؤال` : ''].filter(Boolean).join(' · ') : 'بعد الاستخراج والحل',
+        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${wait ? `<button class="btn${none ? ' sec' : ' primary'}" type="button" data-gofolder="untopic">افتح المستني (${wait})</button>` : ''}${pc ? `<button class="btn sec" type="button" data-gofolder="topicwait" data-parts="extra">افتح اقتراح الزيادة (${pc})</button>` : ''}${re ? `<button class="btn sec" type="button" data-gofolder="topicwait" data-parts="recheck">افتح "محتاجة تتراجع بعد تعديل السؤال" (${re})</button>` : ''}${chs}` : '' };
     })()]),
     { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0, left: n('awaiting_rebuild'),
       text: n('awaiting_rebuild') ? `${n('awaiting_rebuild')} ينتظر إعادة التركيب` : 'لا شيء',
