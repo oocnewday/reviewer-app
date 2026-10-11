@@ -3,7 +3,7 @@
   --paper:#F3F5F9; --surface:#FFFFFF; --line:#D8DEEA; --line-2:#E8ECF3;
   --cobalt:#22348C; --cobalt-2:#E7EAF7;
   --stain:#E4EE6A; --stain-ink:#2F3300;
-  --ok:#1D7A52; --ok-2:#E3F2EA;
+  --ok:#1D7A52; --ok-2:#E3F2EA; --ok-3:#F0F8F3; --ok-line:#C6E3D3;
   --warn:#AE3F28; --warn-2:#F8E7E2;
   --amber:#8A5E00; --amber-2:#FBF1D9;
   --radius:14px; --radius-s:8px;
@@ -17,7 +17,7 @@
     --paper:#0E1426; --surface:#161E35; --line:#2A3553; --line-2:#212B46;
     --cobalt:#8FA2F2; --cobalt-2:#1E2A55;
     --stain:#5B6214; --stain-ink:#F4F8C8;
-    --ok:#5CC896; --ok-2:#12352A;
+    --ok:#5CC896; --ok-2:#12352A; --ok-3:#14292B; --ok-line:#25503F;
     --warn:#F08F77; --warn-2:#3C1D17;
     --amber:#E6BD5C; --amber-2:#3A2E10;
   }
@@ -797,3 +797,22 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .f-lead,.rb-lead,.qhead,.fgrid{scroll-margin-top:84px}
 .qhead .count{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .parts{margin-bottom:10px}
+/* 6.1 (owner 11/10): tiles for information only (nothing asked there) are light green; a small line under a tile's name says what its count is made of */
+.ftile.info-t{background:var(--ok-3);border-color:var(--ok-line)}
+.ftile.info-t .ft-n{background:var(--ok-2);color:var(--ok)}
+.ftile.info-t[data-on="true"]{background:var(--cobalt);border-color:var(--cobalt)}
+.ftile.info-t[data-on="true"] .ft-n{background:rgba(255,255,255,.25);color:inherit}
+.ftile .ft-s{display:block;font-size:.78rem;font-weight:500;color:var(--ink-2);line-height:1.5;margin-top:4px}
+.ftile[data-on="true"] .ft-s{color:inherit;opacity:.92}
+/* 6.1: "📋 الباقي" (chapter card and summary): a folder is a blue outlined button, the questions that have not reached the review a grey label */
+.ftile .ft-s .nw{white-space:nowrap}
+.sc-left{margin-top:10px;padding:8px 10px 10px;border-radius:10px;background:var(--paper)}
+.sc-left .left-h{margin:0 0 6px;font-weight:700;font-size:.92rem}
+.lps{display:flex;flex-wrap:wrap;gap:6px}
+.lp{display:inline-flex;align-items:center;gap:5px;min-height:36px;padding:4px 12px;border-radius:999px;border:1px solid transparent;background:var(--line-2);color:var(--ink-2);font:inherit;font-size:.88rem;line-height:1.3;text-align:start}
+.lp b{font-variant-numeric:tabular-nums}
+.lp.go{background:var(--surface);border-color:var(--cobalt);color:var(--cobalt);font-weight:600;cursor:pointer}
+.lp.go:hover{background:var(--cobalt-2)}
+.cs-act.lps{margin-top:8px;gap:6px}
+.sc-done.wait{background:var(--paper);color:var(--ink-2);font-weight:600}
+.cs-note{margin:6px 0 0}

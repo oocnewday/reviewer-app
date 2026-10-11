@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.0';
-const APP_BUILD = '9/10/2026';
+const APP_VERSION = '6.1';
+const APP_BUILD = '11/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -387,11 +387,14 @@ const FOLDERS = [
   { id: 'dups', label: 'محتمل مكرر 🔁', test: r => (r.dup_pending || 0) > 0 },   // 4.1 (backlog 29): pairs waiting for a decision; the tile always shows (5.5)
   { id: 'topicre', label: 'مواضيع تتراجع 🏷️', test: r => !!(S.topicR && S.topicR.has(r.qid)) },   // 5.7 (migration 062): edited after the topics were confirmed
   { id: 'notappr', label: 'أسئلة لم تُعتمد', test: r => r.status !== 'approved' },   // 5.9 (owner 8/10): what is still missing in the chosen chapter (6.0: plural names)
-  { id: 'untopic', label: 'أسئلة لم تتأكد مواضيعها', test: r => !!(S.topicC && !S.topicC.has(r.qid)) },   // topics not confirmed yet (students see confirmed ones only)
+  // topics not finished yet (students see confirmed ones only). 6.1: everything outside "مواضيعها متأكدة ✅", so the two add up to all the questions
+  { id: 'untopic', label: 'أسئلة لم تتأكد مواضيعها', test: r => !!(S.topicC && !(S.topicC.has(r.qid) && !TP.extra(r) && !TP.recheck(r))) },
   // 6.0 (owner 9/10): every topic state is a folder in one group; "مستنية تأكيدك" has three parts the reviewer can switch off
   { id: 'topicwait', label: 'مستنية تأكيدك', test: r => !!S.topicC && TPARTS.some(([k]) => TP[k](r)) },
-  { id: 'notopic', label: 'مالهاش موضوع لسه', test: r => !!(S.topicC && !S.topicC.has(r.qid) && !S.topicS.has(r.qid)) },
-  { id: 'topicok', label: 'مواضيعها متأكدة ✅', test: r => !!(S.topicC && S.topicC.has(r.qid)) },
+  { id: 'notopic', label: 'مالهاش موضوع لسه', test: r => !!(S.topicC && !S.topicC.has(r.qid) && !S.topicS.has(r.qid) && !TP.recheck(r)) },
+  // 6.1 (owner 11/10): a question sits in one topic box only: confirmed with nothing waiting (an extra suggestion or a check after an edit
+  // keeps it in "مستنية تأكيدك"), so the three boxes add up to all the questions
+  { id: 'topicok', label: 'مواضيعها متأكدة ✅', test: r => !!(S.topicC && S.topicC.has(r.qid) && !TP.extra(r) && !TP.recheck(r)) },
   { id: 'all', label: 'الكل', test: () => true },
 ];
 // 6.0: the three parts of "مستنية تأكيدك": a first suggestion, an extra topic suggested on confirmed topics, and topics confirmed before an edit
@@ -408,9 +411,12 @@ const reasonLabel = k => (HID_MAIN.find(x => x[0] === k) || [])[1] || hiddenLabe
 /* 6.0 (owner 9/10): what every folder, filter and card holds and what the reviewer does there, in plain words, behind a book
    button; written for a beginner. "todo" = an action is asked of him; "free" = nothing is asked (shown in green). */
 const INFO = {
-  notappr: { what: 'كل سؤال لسه ماتعتمدش، أيًا كانت حالته: مستني مراجعة، أو مستني تعديل، أو اتعدّل ومستني اعتماد.', todo: 'افتحه وشوف هو واقف فين، وكمّل اللي عليك فيه.' },
-  untopic: { what: 'أسئلة مواضيعها لسه ماتأكدتش. الطلاب مابيشوفوش غير الموضوع المتأكد.', todo: 'لو ليها موضوع مقترح: افتح السؤال واضغط «✓ تأكيد». ولو مالهاش موضوع خالص: الإدارة بتشغّل محادثة التصنيف الأول.' },
-  todo: { what: 'كل الأسئلة اللي مستنية قرار مراجع: اللي لسه في المراجعة، واللي رجعت بعد التعديل.', todo: 'افتح السؤال، واعتمده لو تمام، أو اطلب تعديل.' },
+  notappr: { what: 'كل سؤال وصل للمراجعة ولسه ماتعتمدش، أيًا كانت حالته: مستني مراجعة، أو مستني تعديل، أو اتعدّل ومستني اعتماد.', todo: 'افتحه وشوف هو واقف فين، وكمّل اللي عليك فيه.' },
+  untopic: { what: 'أسئلة مواضيعها لسه ماخلصتش: ماتأكدتش، أو متأكدة وعليها حاجة مستنية (موضوع زيادة مقترح، أو السؤال اتعدّل بعد التأكيد). الطلاب مابيشوفوش غير الموضوع المتأكد.', todo: 'لو ليها موضوع مقترح: افتح السؤال واضغط «✓ تأكيد» (أو «✓ لسه مناسبة» لو اتعدّل بعد التأكيد). ولو مالهاش موضوع خالص: الإدارة بتشغّل محادثة التصنيف الأول.',
+    tip: 'العدد هنا + «مواضيعها متأكدة ✅» = كل الأسئلة، وده نفس شريط «المواضيع» في كارت الشابتر.' },
+  // 6.1 (owner 11/10): the three kinds that add up to the count, also written small inside the tile
+  todo: { what: 'كل الأسئلة اللي مستنية قرار مراجع، وهي 3 أنواع:', list: ['<b>لم تُفتح:</b> في المراجعة وانت لسه مافتحتهاش.', '<b>فُتحت بلا قرار:</b> فتحتها ولسه ماخدتش قرار.', '<b>رجعت بعد التعديل:</b> Claude عدّلها بعد طلب تعديل، أو مراجع عدّلها تعديل سريع. ودي مربعاتها في «✏️ التعديلات».'],
+    todo: 'افتح السؤال، واعتمده لو تمام، أو اطلب تعديل.', tip: 'الرقم هنا هو مجموع التلاتة، ومكتوب بخط صغير تحت اسم المربع.' },
   new: { what: 'أسئلة في المراجعة انت لسه مافتحتهاش ولا مرة.', todo: 'ابدأ بيها، دي أول مرة تشوفها.' },
   seen: { what: 'أسئلة فتحتها قبل كده، بس لسه مااعتمدتهاش ولا طلبت تعديلها.', todo: 'ارجعلها وخد فيها قرار.' },
   drafts: { what: 'طلبات تعديل بدأت تكتبها ولسه مابعتّهاش. محفوظة على جهازك وعلى حسابك.', todo: 'افتحها وكمّل الطلب وابعته، أو امسح المسودة.' },
@@ -420,21 +426,25 @@ const INFO = {
     todo: 'افتح السؤال واضغط «✓ تأكيد» (أو «✓ لسه مناسبة» لو اتعدّل بعد التأكيد) لو المواضيع مناسبة، أو «تغيير» وعدّلها. ولو السؤال لسه في المراجعة، اعتماده بيأكد مواضيعه لوحده.',
     tip: 'لما تضغط المربع، الأنواع التلاتة بتنوّر تحته بأرقامها، وتقدر تشيل أي نوع مش عايزه.' },
   notopic: { what: 'أسئلة مفيش ليها أي موضوع مقترح لسه.', free: 'مفيش مطلوب منك. الإدارة بتشغّل محادثة التصنيف، وبعدها بتنتقل لـ«مستنية تأكيدك». ولو حابب، تقدر تختار موضوع من صفحة السؤال بزرار «تغيير».' },
-  topicok: { what: 'أسئلة مواضيعها اتأكدت، وبتظهر للطلاب.', free: 'مفيش مطلوب منك. افتحها لو حابب تبص عليها تاني.' },
+  topicok: { what: 'أسئلة مواضيعها اتأكدت ومفيش عليها حاجة مستنية، وبتظهر للطلاب.', free: 'مفيش مطلوب منك. افتحها لو حابب تبص عليها تاني.',
+    tip: 'السؤال اللي عليه اقتراح موضوع زيادة، أو اتعدّل بعد التأكيد، بيفضل في «مستنية تأكيدك» لحد ما يتحسم، فكل سؤال بيبقى في مربع واحد بس من مربعات المواضيع.' },
   requested: { what: 'أسئلة اتطلب تعديلها، ومستنية Claude يعدّلها.', free: 'مفيش مطلوب منك دلوقتي. بعد التعديل بترجعلك في «تنتظرك».' },
   revised: { what: 'أسئلة Claude عدّلها على حسب طلب التعديل.', todo: 'راجع التعديل، واعتمد السؤال أو اطلب تعديل تاني.' },
   quick: { what: 'أسئلة مراجع عدّلها بالتعديل السريع.', todo: 'راجع التعديل، واعتمده أو اطلب تعديل.' },
   approved: { what: 'أسئلة اتعتمدت.', free: 'مفيش مطلوب منك.' },
-  alerts: { what: 'أسئلة عليها ملاحظة «⚠️ للمراجع» من الاستخراج، زي: إجابة المصدر، أو سؤال ناقص، أو تصليح كتابة.', todo: 'اقرا التنبيه في صفحة السؤال قبل ما تقرر.' },
+  alerts: { what: 'أسئلة عليها ملاحظة «⚠️ للمراجع» من الاستخراج، زي: إجابة المصدر، أو سؤال ناقص، أو تصليح كتابة.', todo: 'لو السؤال لسه في المراجعة: اقرا التنبيه في صفحة السؤال قبل ما تقرر. ولو اتعتمد: للاطلاع بس، ومفيش مطلوب منك.',
+    tip: 'التنبيه بيفضل على السؤال حتى بعد الاعتماد، وتحت اسم المربع مكتوب كام واحد اتعتمد وكام لسه.' },
   notes: { what: 'أسئلة عليها ملاحظة مكتوبة للطلاب: منشورة، أو مستنية الاعتماد، أو جوه طلب تعديل.', free: 'للاطلاع.' },
   all: { what: 'كل الأسئلة في الشابتر اللي اخترته فوق.', free: 'للبحث والرجوع لأي سؤال.' },
   topicre: { what: 'أسئلة مواضيعها اتأكدت، وبعدين السؤال نفسه اتعدّل.', todo: 'افتح السؤال، واضغط «✓ لسه مناسبة» أو «تغيير».' },
-  action: { name: '📋 المطلوب منك', what: 'كل الحاجات اللي مستنية منك إجراء، في كل الشباتر، في مكان واحد وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يفتحلك أسئلته على طول.' },
-  scope: { name: '📚 الشابتر', what: 'اختار شابتر، وكل الأرقام والقوايم اللي تحت بتمشي عليه. و«الكل» يعني كل الشباتر.', free: 'الشريطين بيقولولك الشابتر خلص قد إيه: الاعتماد، والمواضيع.' },
-  hidden: { name: '🙈 المخفي عن الطلاب', what: 'أسئلة مش ظاهرة للطلاب دلوقتي. لما تضغطه، أسباب الإخفاء بتنوّر تحته بأرقامها:', list: HID_MAIN.map(x => x[1]),
+  action: { name: '📋 المطلوب منك', what: 'كل الحاجات اللي مستنية منك إجراء، في كل الشباتر، في مكان واحد وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يفتحلك أسئلته على طول.',
+    tip: 'السؤال الواحد ممكن يبقى في أكتر من سطر، زي سؤال في المراجعة وعليه موضوع مقترح (اعتماده بيأكد موضوعه لوحده)، والرقم الكبير بيعدّه مرة واحدة.' },
+  scope: { name: '📚 الشابتر', what: 'اختار شابتر، وكل الأرقام والقوايم اللي تحت بتمشي عليه. و«الكل» يعني كل الشباتر.', free: 'الشريطين بيقولولك الشابتر خلص قد إيه: الاعتماد، والمواضيع. وسطر «📋 الباقي» بيقول اللي فاضل، وكل حاجة فيه بتفتح أسئلتها. ولما يخلص اللي وصلك، بيقولك لو فيه أسئلة لسه بتتجهز (دي شغل الإدارة، وبتوصلك لوحدها).' },
+  hidden: { name: '🙈 المخفي عن الطلاب', what: 'أسئلة مش ظاهرة للطلاب دلوقتي. لما تضغطه، أسباب الإخفاء بتنوّر تحته بأرقامها:',
+    list: ['ثقة منخفضة', 'مختلف مع المصدر', 'ناقص في المصدر', '<b>المراجع طلب تغيير الإجابة:</b> الإجابة عليها طلب تغيير مفتوح، أو اتغيرت ولسه التغيير ماتعتمدش. السؤال بيرجع للطلاب أول ما يتعتمد.'],
     todo: 'شيل أي سبب مش عايزه، والقايمة بتتغير على طول. ولو في سبب نادر تاني (زي «بقرار الإدارة») بيظهر لوحده لما يبقى فيه أسئلة.' },
   conf: { name: '🤖 ثقة Claude في حله', what: 'قد إيه Claude كان متأكد من الحل: عالية، أو متوسطة، أو منخفضة.', todo: 'اختار حاجة واحدة. الأقل ثقة أولى بالمراجعة.' },
-  src: { name: '📄 مقارنة بملف المصدر', what: '', list: ['<b>≠ مختلف مع المصدر:</b> حل Claude غير إجابة الملف، حتى لو اتعتمد وبقى ظاهر للطلاب.', '<b>◐ ناقص في المصدر:</b> السؤال كان ناقص في الملف، حتى لو اتكمّل واتعتمد.'], todo: 'ممكن تختار الاتنين مع بعض.' },
+  src: { name: '📄 مقارنة بملف المصدر', what: '', list: ['<b>≠ مختلف مع المصدر:</b> حل Claude غير إجابة الملف، حتى لو اتعتمد وبقى ظاهر للطلاب.', '<b>◐ ناقص في المصدر:</b> السؤال كان ناقص في الملف (أو تنبيهه بيقول كده)، حتى لو اتكمّل واتعتمد.'], todo: 'ممكن تختار الاتنين مع بعض.' },
 };
 const BOOK = '<svg class="bk-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 6.5C10.3 5.2 7.9 4.6 4.5 4.8v13.3c3.4-.2 5.8.4 7.5 1.7 1.7-1.3 4.1-1.9 7.5-1.7V4.8c-3.4-.2-5.8.4-7.5 1.7z"/><path d="M12 6.5v13.3"/></svg>';
 const infoBtn = (k, name) => `<button class="info" type="button" data-info="${k}" aria-label="شرح: ${esc(name)}">${BOOK}</button>`;
@@ -455,6 +465,8 @@ function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.vi
 const NO_FILTERS = { conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hidOff: [] };   // 6.0: hidden reasons are switched off one by one; no topic filter
 const VISIBLE_STATES = new Set(['ai', 'reviewed']);
 const isHidden = r => String(r.student_state || '').startsWith('hidden_');
+// 6.1: incomplete in the source file, even when it was completed later (a rebuild clears is_incomplete; the "⚠️ للمراجع" note keeps it)
+const isIncomplete = r => !!r.is_incomplete || (r.alert_kinds || []).includes('incomplete');
 const HIDDEN_SHORT = { hidden_disagree: 'اختلاف مع المصدر', hidden_low_confidence: 'ثقة منخفضة', hidden_incomplete: 'ناقص', hidden_completed: 'اختياراته من المراجع', hidden_no_source: 'المصدر من غير إجابة', hidden_answer_fix: 'لحد تصليح الإجابة', hidden_admin: 'بقرار الإدارة', hidden_archived: 'مؤرشف' };
 const hiddenLabel = k => HIDDEN_SHORT[k] || String(k).replace(/^hidden_/, '').replace(/_/g, ' ');
 function countBy(rows, key) { const o = {}; for (const r of rows) { const k = key(r); o[k] = (o[k] || 0) + 1; } return o; }
@@ -486,7 +498,7 @@ function fixView() {
 function applyFilters(rows, view, skip) {
   if (view.conf && view.conf !== 'all') rows = rows.filter(r => r.ai_confidence === view.conf);
   if (view.disagree) rows = rows.filter(r => r.match_status === 'disagree');
-  if (view.incomplete) rows = rows.filter(r => r.is_incomplete);
+  if (view.incomplete) rows = rows.filter(isIncomplete);
   if (skip !== 'chapter' && view.chapter && view.chapter !== 'all') rows = rows.filter(r => r.chapter === view.chapter);
   if (skip !== 'hidden' && view.hidden) { const off = new Set(view.hidOff || []); rows = rows.filter(r => isHidden(r) && !off.has(r.student_state)); }   // 6.0: every reason on, minus the ones switched off
   return rows;
@@ -495,25 +507,36 @@ function applyFilters(rows, view, skip) {
    6.0 (owner 9/10): five groups named for what the reviewer does there, each with a one-line explanation; every tile has its
    label on top, its count under it and a book button in its corner that explains it; the topic states live in one group. */
 const FOLDER_GROUPS = [
-  ['📌 لسه ناقص', 'اللي فاضل عشان الشابتر يكمل', ['notappr', 'untopic']],
+  ['📌 لسه ناقص', 'اللي فاضل من الأسئلة اللي وصلت للمراجعة', ['notappr', 'untopic']],   // 6.1: the questions not solved yet are in the chapter card's "📋 الباقي"
   ['✋ مستنية قرارك', 'أسئلة محتاجة منك اعتماد أو قرار', ['todo', 'new', 'seen', 'drafts', 'dups', 'rebuild']],
   ['🏷️ تصنيف مواضيع', 'كل حاجة تخص المواضيع في مكان واحد', ['topicwait', 'notopic', 'topicok']],
   ['✏️ التعديلات', 'أسئلة اتطلب تعديلها أو اتعدّلت', ['requested', 'revised', 'quick']],
   ['📂 للاطلاع', 'للرجوع لأي سؤال', ['approved', 'alerts', 'notes', 'all']],
 ];
 const TOPIC_FOLDERS = ['untopic', 'topicwait', 'notopic', 'topicok'];
-const HOT = new Set(['todo', 'new', 'drafts', 'rebuild', 'dups', 'topicwait', 'notappr', 'untopic', 'revised', 'quick']);
+const HOT = new Set(['todo', 'new', 'seen', 'drafts', 'rebuild', 'dups', 'topicwait', 'notappr', 'untopic', 'revised', 'quick']);   // 6.1: 'seen' waits for a decision too
 const DONE = new Set(['approved', 'topicok']);   // a green count: work that is finished
+// 6.1 (owner 11/10): tiles that are for information only (nothing is asked there) are light green; "فيها تنبيه" only while all of its questions are approved
+const INFO_ONLY = new Set(['notopic', 'topicok', 'requested', 'approved', 'notes', 'all']);
+const infoOnly = (id, subs) => INFO_ONLY.has(id) || (id === 'alerts' && !(subs.alertsOpen > 0));
 const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات للطلاب', approved: 'معتمدة ✅' };   // shorter on the tile; the list title keeps the full name
 const folderName = id => TILE_LABEL[id] || (FOLDERS.find(f => f.id === id) || {}).label || '';
-function folderGrid(v, counts) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
+// 6.1 (owner 11/10): small text inside a tile that says what its count is made of (only while the count is above 0)
+function tileSubs(rows) {
+  const n = t => rows.filter(t).length, al = rows.filter(r => r.alert_kinds && r.alert_kinds.length), alOpen = al.filter(r => r.status !== 'approved').length;
+  return {
+    todo: [`لم تُفتح ${n(r => r.status === 'in_review' && !r.seen)}`, `بلا قرار ${n(r => r.status === 'in_review' && r.seen)}`, `بعد التعديل ${n(r => r.status === 'revised')}`],
+    alerts: [`معتمدة ${al.length - alOpen}`, `لم تُعتمد ${alOpen}`], alertsOpen: alOpen,
+  };
+}
+function folderGrid(v, counts, subs = {}) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
   const one = v.chapter && v.chapter !== 'all';
   return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, sub, ids]) => {
     const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (S.topicC || !TOPIC_FOLDERS.includes(f.id)));   // no topic tiles before migration 048
     if (!tiles.length) return '';
     const head = ids.includes('topicwait') ? `${title} ${one ? 'الشابتر' : 'الشباتر'}` : title;
-    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id);
-      return `<div class="ftile${n ? '' : ' zero'}${n && HOT.has(f.id) ? ' hot' : ''}${n && DONE.has(f.id) ? ' done' : ''}" data-on="${on}"><button class="ft-main" type="button" data-folder="${f.id}" aria-pressed="${on}"><span class="ft-l">${esc(name)}</span><span class="ft-n">${n}</span></button>${infoBtn(f.id, name)}</div>`; };
+    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id), s = n && Array.isArray(subs[f.id]) ? subs[f.id].map((x, i, a) => `<span class="nw">${esc(x)}${i < a.length - 1 ? ' +' : ''}</span>`).join(' ') : '';
+      return `<div class="ftile${n ? '' : ' zero'}${n && HOT.has(f.id) ? ' hot' : ''}${n && DONE.has(f.id) ? ' done' : ''}${infoOnly(f.id, subs) ? ' info-t' : ''}" data-on="${on}"><button class="ft-main" type="button" data-folder="${f.id}" aria-pressed="${on}"><span class="ft-l">${esc(name)}${s ? `<span class="ft-s">${s}</span>` : ''}</span><span class="ft-n">${n}</span></button>${infoBtn(f.id, name)}</div>`; };
     return `<section class="fgroup" aria-label="${esc(head)}"><div class="fg-h">${esc(head)}</div><p class="fg-s">${esc(sub)}</p><div class="fg">${tiles.map(tile).join('')}</div></section>`;
   }).join('')}</nav>`;
 }
@@ -532,13 +555,14 @@ const ACTS = [['✋', 'todo', 'أسئلة تنتظر قرارك', 'اعتماد 
 function actionCounts() {
   return ACTS.map(([ic, id, t, sub]) => {
     const f = FOLDERS.find(x => x.id === id);
-    const n = id === 'rebuild' ? (S.rebuild || []).length : id === 'topicwait' && !S.topicC ? 0 : S.rows.filter(f.test).length;
-    return { ic, id, t, sub, n };
+    const rows = id === 'rebuild' ? (S.rebuild || []) : id === 'topicwait' && !S.topicC ? [] : S.rows.filter(f.test);
+    return { ic, id, t, sub, n: rows.length, qids: rows.map(r => r.qid) };
   }).filter(a => a.n);
 }
 function todoButton() {
-  const acts = actionCounts(), total = acts.reduce((a, x) => a + x.n, 0);
-  return `<div class="todo-row"><button class="todo-btn${total ? '' : ' none'}" type="button" id="todo-open"><span class="ic" aria-hidden="true">${total ? '📋' : '✅'}</span><span class="grow"><b>المطلوب منك</b><span class="sub">${total ? 'اضغط تشوف كل اللي محتاج منك إجراء' : 'مفيش حاجة مطلوبة منك دلوقتي بفضل الله'}</span></span>${total ? `<span class="big-n" aria-label="${total} إجراء">${total}</span>` : ''}</button>${infoBtn('action', 'المطلوب منك')}</div>`;
+  // 6.1 (owner 11/10): the big number counts each question once, even when it is in two rows (in review with a suggested topic, say)
+  const acts = actionCounts(), total = new Set(acts.flatMap(a => a.qids)).size;
+  return `<div class="todo-row"><button class="todo-btn${total ? '' : ' none'}" type="button" id="todo-open"><span class="ic" aria-hidden="true">${total ? '📋' : '✅'}</span><span class="grow"><b>المطلوب منك</b><span class="sub">${total ? 'اضغط تشوف كل اللي محتاج منك إجراء' : 'مفيش حاجة مطلوبة منك دلوقتي بفضل الله'}</span></span>${total ? `<span class="big-n" aria-label="${total} سؤال">${total}</span>` : ''}</button>${infoBtn('action', 'المطلوب منك')}</div>`;
 }
 // open a folder from anywhere (the actions sheet, the admin panel, the chapter summary): optional parts, chapter and a clean filter
 function goFolder(folder, { parts, chapter = 'all', clear = true } = {}) {
@@ -551,8 +575,9 @@ function toList() {
   if (t) t.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
 function openActions() {
-  const acts = actionCounts();
-  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📋 المطلوب منك</h2><p class="hint" style="margin-top:4px">في كل الشباتر. اضغط أي سطر يفتحلك أسئلته.</p></div>
+  const acts = actionCounts(), sum = acts.reduce((a, x) => a + x.n, 0), total = new Set(acts.flatMap(a => a.qids)).size;
+  const twice = sum > total ? ` مجموع السطور ${sum}، وفيهم ${total} سؤال مختلف، لأن السؤال الواحد ممكن يبقى في أكتر من سطر.` : '';
+  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📋 المطلوب منك</h2><p class="hint" style="margin-top:4px">في كل الشباتر. اضغط أي سطر يفتحلك أسئلته.${twice}</p></div>
     ${acts.length ? acts.map(a => `<button class="act" type="button" data-act="${a.id}"><span class="ic" aria-hidden="true">${a.ic}</span><span class="grow"><b>${esc(a.t)}</b><span class="s">${esc(a.sub)}</span></span><span class="n">${a.n}</span><span class="go">افتح ←</span></button>`).join('')
       : '<div class="ex-blk free">✅ مفيش حاجة مطلوبة منك دلوقتي بفضل الله.</div>'}
     <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
@@ -578,24 +603,64 @@ function guideAll() {
   const row = k => { const f = INFO[k]; return `<div class="gl"><b>${esc(f.name || folderName(k))}</b><span>${esc(f.what)}${f.list ? ' ' + f.list.map(x => x.replace(/<[^>]+>/g, '')).join(' · ') : ''} ${esc(f.todo || f.free || '')}</span></div>`; };
   const groups = FOLDER_GROUPS.map(([h, , ids]) => { const ok = ids.filter(id => S.topicC || !TOPIC_FOLDERS.includes(id)); return ok.length ? `<div class="gl-g">${esc(ids.includes('topicwait') ? h + ' الشباتر' : h)}</div>${ok.map(row).join('')}` : ''; }).join('');
   const { sheet, close } = openSheet(`<div class="sheet-head ex-h"><span class="ex-bk" aria-hidden="true">${BOOK}</span><h2>شرح كل الفولدرات والفلاتر</h2></div>
+    <div class="ex-blk free">💡 المربع الأخضر الفاتح للاطلاع بس، ومفيش مطلوب منك فيه. والرقم الأزرق معناه إن فيه شغل مستنيك.</div>
     ${groups}<div class="gl-g">🔍 التصفية</div>${['hidden', 'conf', 'src'].map(row).join('')}<div class="gl-g">فوق الصفحة</div>${['action', 'scope'].map(row).join('')}
     <div class="foot"><button class="btn" type="button" data-close>تمام</button></div>`);
   sheet.querySelector('[data-close]').onclick = () => close();
 }
 /* 5.9 (owner 8/10): "📚 الشابتر" above the folders: same-size choices (the long name ends with … and shows whole on hold),
    then where the chosen chapter stands: approved and confirmed topics, and a green line once both are full. */
+/* 6.1 (owner 11/10): the reviewers' side shows reviewer work only, and the admin panel preparation work only (the owner looks at both).
+   What is left for the reviewer in a chapter ('all' = every chapter): the questions that reached the review (not approved, topics
+   waiting, no topic) and the rebuilds his permission lets him do (rebuild_queue). The questions still being prepared (not solved,
+   solved on their way, a rebuild someone else does) are never counted here; reviewer_backlog (migration 063) only tells whether
+   there are any, so "اكتمل" shows only when a chapter is really finished. Without the function (an older server) that is unknown,
+   and the wording says it covers what reached the review only. */
+function backlogOf(ch) {
+  if (!S.backlog) return null;
+  const o = { unsolved: 0, rebuild: 0, solved: 0 };
+  for (const b of S.backlog) if (ch === 'all' || b.chapter === ch) { o.unsolved += Number(b.unsolved) || 0; o.rebuild += Number(b.rebuild) || 0; o.solved += Number(b.solved) || 0; }
+  return o;
+}
+const rebuildIn = ch => ch === 'all' ? (S.rebuild || []) : (S.rebuild || []).filter(r => r.chapter === ch);
+function chapterLeft(ch) {
+  const rows = ch === 'all' ? S.rows : S.rows.filter(r => r.chapter === ch), cnt = id => rows.filter(FOLDERS.find(f => f.id === id).test).length;
+  const bl = backlogOf(ch), rb = rebuildIn(ch).length;
+  const o = { total: rows.length, appr: cnt('approved'), topicok: S.topicC ? cnt('topicok') : null, notappr: cnt('notappr'),
+    topicwait: S.topicC ? cnt('topicwait') : 0, notopic: S.topicC ? cnt('notopic') : 0, rebuild: rb, known: !!bl,
+    // still being prepared: not solved, solved on its way, or waiting for a rebuild he cannot do (no numbers on this side)
+    preparing: bl ? bl.unsolved + bl.solved + Math.max(0, bl.rebuild - rb) > 0 : false,
+    // the rebuild folder opens on this chapter only when the chapter has questions in the list; otherwise on every chapter, so only when that holds the same questions
+    rbGo: rb > 0 && (ch === 'all' || chapterList().includes(ch) || rb === (S.rebuild || []).length) };
+  o.left = o.notappr + o.topicwait + o.notopic + o.rebuild;
+  o.state = o.left ? 'left' : !o.total ? (o.preparing ? 'none_yet' : '') : !o.known ? 'reached_done' : o.preparing ? 'yours_done' : 'done';
+  return o;
+}
+// the "📋 الباقي" items: each one opens its folder (a rebuild that cannot open on this chapter alone is a plain label)
+function leftItems(L, ch, attr = 'data-left', withOk = false) {
+  const it = [], go = (folder, label, n) => n && it.push(`<button class="lp go" type="button" ${attr}="${folder}" data-ch="${esc(ch)}">${label} <b>${n}</b></button>`);
+  go('notappr', 'لم تُعتمد', L.notappr); go('topicwait', 'مواضيع مستنية تأكيدك', L.topicwait); go('notopic', 'مالهاش موضوع', L.notopic);
+  if (L.rbGo) go('rebuild', 'إعادة تركيب', L.rebuild); else if (L.rebuild) it.push(`<span class="lp">إعادة تركيب <b>${L.rebuild}</b></span>`);
+  if (withOk) go('topicok', 'مواضيعها متأكدة ✅', L.topicok);
+  return it;
+}
+// the line once nothing is left for the reviewer (L.state): green when his part is done, plain while nothing has reached him yet
+const stateText = (L, ch) => ({
+  done: `✅ ${ch === 'all' ? 'كل الشباتر اكتملت' : 'الشابتر اكتمل'} بفضل الله: الأسئلة كلها معتمدة، ومواضيعها متأكدة.`,
+  yours_done: '✅ كل اللي وصلك خلص بفضل الله، وفيه أسئلة لسه بتتجهز وهتوصلك لوحدها.',
+  reached_done: `✅ ${ch === 'all' ? 'كل الأسئلة' : 'كل أسئلة الشابتر'} اللي وصلت للمراجعة خلصت بفضل الله: معتمدة، ومواضيعها متأكدة.`,
+  none_yet: '⏳ لسه مفيش أسئلة وصلت للمراجعة هنا. فيه أسئلة بتتجهز وهتوصلك لوحدها.',
+})[L.state] || '';
 function scopeCard(v) {
-  const chs = chapterList(); if (!chs.length) return '';
+  const chs = chapterList(); if (!chs.length && !(S.rebuild || []).length && !(S.backlog || []).length) return '';
   const n = countBy(S.rows, r => r.chapter), cur = chs.includes(v.chapter) ? v.chapter : 'all';
-  const rows = inScope(S.rows, { chapter: cur }), total = rows.length, appr = rows.filter(r => r.status === 'approved').length;
-  const conf = S.topicC ? rows.filter(r => S.topicC.has(r.qid)).length : null, re = S.topicR ? rows.filter(r => S.topicR.has(r.qid)).length : 0;
-  const done = total > 0 && appr === total && (conf === null || conf === total) && !re;
+  const L = chapterLeft(cur), items = leftItems(L, cur), msg = stateText(L, cur);
   const chip = (k, label, cnt) => `<button class="scope" type="button" data-scope="${esc(k)}" aria-pressed="${cur === k}" title="${esc(label)}"><span class="sc-l" dir="auto">${esc(label)}</span><span class="sc-n">${cnt} سؤال</span></button>`;
   return `<section class="scard" aria-label="الشابتر">
     <div class="sc-head"><h2>📚 الشابتر</h2><span class="grow"></span><button class="linkbtn small" type="button" id="chsum">📊 كل الشباتر</button>${infoBtn('scope', 'الشابتر')}</div>
     <div class="scopes" id="scopes" role="group" aria-label="اختار الشابتر">${chip('all', 'الكل', S.rows.length)}${chs.map(c => chip(c, c, n[c])).join('')}</div>
-    <div class="sc-prog">${progBar('الاعتماد', appr, total, 'a')}${conf === null ? '' : progBar('المواضيع', conf, total, 't')}</div>
-    ${done ? `<div class="sc-done">✅ ${cur === 'all' ? 'كل الشباتر اكتملت' : 'الشابتر اكتمل'} بفضل الله: الأسئلة كلها معتمدة، ومواضيعها متأكدة.</div>` : ''}
+    ${L.total ? `<div class="sc-prog">${progBar('الاعتماد', L.appr, L.total, 'a')}${L.topicok === null ? '' : progBar('المواضيع', L.topicok, L.total, 't')}</div>` : ''}
+    ${items.length ? `<div class="sc-left"><p class="left-h">📋 الباقي:</p><div class="lps">${items.join('')}</div></div>` : msg ? `<div class="sc-done${L.state === 'none_yet' ? ' wait' : ''}">${msg}</div>` : ''}
   </section>`;
 }
 // 5.6 (owner 7/10): a line under "🔍 تصفية" says what it holds, until the reviewer opens it once or closes the line (per device)
@@ -658,7 +723,9 @@ async function loadQueue() {
     tasks.push(rpc('chapter_runs_status').catch(e => { console.warn('chapter_runs_status:', e && e.message); return null; }));
   }
   const ts = rpc('topic_states').catch(e => { console.warn('topic_states:', e && e.message); return null; });   // 5.3 (migration 048)
+  const bl = rpc('reviewer_backlog').catch(e => { console.warn('reviewer_backlog:', e && e.message); return null; });   // 6.1 (migration 063); missing: the old wording
   const [q, n, , , p, ch] = await Promise.all(tasks);
+  const blv = await bl; S.backlog = Array.isArray(blv) ? blv : null;
   const tsv = await ts; S.topicC = tsv ? new Set(tsv.c || []) : null; S.topicS = tsv ? new Set(tsv.s || []) : null;
   S.topicR = tsv && tsv.r ? new Set(tsv.r) : null;   // 5.7 (migration 062): edited after the topics were confirmed
   S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.chapters = Array.isArray(ch) ? ch : null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
@@ -797,7 +864,7 @@ function renderQueue() {
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
     ${scopeCard(v)}
-    ${folderGrid(v, counts)}
+    ${folderGrid(v, counts, tileSubs(scoped))}
     <button class="guide-all" type="button" id="guide-all">${BOOK}<span>اقرا شرح كل الفولدرات والفلاتر مرة واحدة</span></button>
     ${!isRb && leadOf(v.folder) ? `<p class="hint rb-lead f-lead">${esc(leadOf(v.folder))}</p>` : ''}
     ${v.folder === 'topicwait' && S.topicC ? topicParts(v) : ''}
@@ -852,6 +919,7 @@ function renderQueue() {
   const ta = document.getElementById('todo-open'); if (ta) ta.onclick = openActions;
   const ga = document.getElementById('guide-all'); if (ga) ga.onclick = guideAll;
   $app.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => set({ chapter: b.dataset.scope }));
+  $app.querySelectorAll('[data-left]').forEach(b => b.onclick = () => goFolder(b.dataset.left, { chapter: b.dataset.ch }));   // 6.1: "📋 الباقي" opens its folder in this chapter, no filter
   centerScope();
   $app.querySelectorAll('[data-unset]').forEach(b => b.onclick = () => set(JSON.parse(b.dataset.unset)));
   document.getElementById('goto').onsubmit = ev => {
@@ -2772,34 +2840,28 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 
 /* 5.8 (owner 8/10): "📊 ملخص الشباتر" for every reviewer: per chapter, from the questions in his folders, how many are approved
    and how many have confirmed topics; a chapter is complete when both are full (and none waits in "مواضيع تتراجع"). */
+// 6.1 (owner 11/10): the same "what is left" as the chapter card (chapterLeft), so the two never disagree; a chapter shows once some of
+// its questions reached the review, or has a rebuild this reviewer may do (the questions still being prepared belong to the admin panel)
 function chapterSummary() {
-  const by = new Map();
-  for (const r of S.rows) {
-    if (!r.chapter) continue;
-    const g = by.get(r.chapter) || { name: r.chapter, total: 0, approved: 0, conf: 0, re: 0 };
-    g.total++; if (r.status === 'approved') g.approved++;
-    if (S.topicC && S.topicC.has(r.qid)) g.conf++;
-    if (S.topicR && S.topicR.has(r.qid)) g.re++;
-    by.set(r.chapter, g);
-  }
-  return [...by.values()].sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+  const names = new Set([...S.rows, ...(S.rebuild || [])].map(r => r.chapter).filter(Boolean));
+  return [...names].map(name => ({ name, ...chapterLeft(name) })).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 }
+const CS_TAG = { done: '<span class="tag ok">✅ اكتمل بفضل الله</span>', yours_done: '<span class="tag ok">✅ اللي وصلك خلص</span>', reached_done: '<span class="tag ok">✅ اللي وصل للمراجعة خلص</span>' };
 function openChapterSummary() {
-  const bar = progBar;
-  const rows = chapterSummary().map(g => {
-    const done = g.approved === g.total && g.conf === g.total && !g.re, wait = g.total - g.conf;
-    return `<div class="cs-row${done ? ' done' : ''}">
-      <div class="cs-h"><b><bdi>${esc(g.name)}</bdi></b> <span class="small muted">${g.total} سؤال</span>${done ? ' <span class="tag ok">✅ اكتمل بفضل الله</span>' : ''}</div>
-      <div class="cs-bars">${bar('الاعتماد', g.approved, g.total, 'a')}${bar('المواضيع', g.conf, g.total, 't')}</div>
-      <div class="cs-act">${wait ? `<button class="linkbtn" type="button" data-cs="untopic" data-ch="${esc(g.name)}">لم تتأكد مواضيعها (${wait})</button>` : ''}${g.conf ? `<button class="linkbtn" type="button" data-cs="topicok" data-ch="${esc(g.name)}">مواضيعها متأكدة (${g.conf})</button>` : ''}${g.re ? `<button class="linkbtn" type="button" data-cs="topicwait" data-ch="${esc(g.name)}" data-parts="recheck">محتاجة تتراجع بعد تعديل السؤال (${g.re})</button>` : ''}</div>
-    </div>`;
-  }).join('');
+  const known = !!S.backlog;
+  const rows = chapterSummary().map(g => `<div class="cs-row${g.state === 'done' ? ' done' : ''}">
+      <div class="cs-h"><b><bdi>${esc(g.name)}</bdi></b> <span class="small muted">${g.total ? `${g.total} سؤال وصل للمراجعة` : 'لسه مفيش أسئلة وصلت للمراجعة'}</span> ${CS_TAG[g.state] || ''}</div>
+      ${g.total ? `<div class="cs-bars">${progBar('الاعتماد', g.appr, g.total, 'a')}${g.topicok === null ? '' : progBar('المواضيع', g.topicok, g.total, 't')}</div>` : ''}
+      <div class="lps cs-act">${leftItems(g, g.name, 'data-cs', true).join('')}</div>
+      ${g.state === 'yours_done' ? '<p class="small muted cs-note">وفيه أسئلة لسه بتتجهز، وهتوصلك لوحدها.</p>' : ''}
+    </div>`).join('');
   const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📊 ملخص الشباتر</h2>
-      <p class="hint" style="margin-top:4px">من الأسئلة اللي في فولدراتك. الشابتر بيكمل لما كل أسئلته تتعتمد، ومواضيعها كلها تتأكد.</p></div>
+      <p class="hint" style="margin-top:4px">${known ? 'من الأسئلة اللي وصلت للمراجعة. الشابتر بيكمل لما كل أسئلته تتعتمد ومواضيعها تتأكد، ومايبقاش فيه أسئلة لسه بتتجهز. اضغط أي زرار أزرق يفتحلك أسئلته.'
+        : 'من الأسئلة اللي وصلت للمراجعة بس. اضغط أي زرار أزرق يفتحلك أسئلته.'}</p></div>
     <div class="csum">${rows || '<p class="small muted">مفيش أسئلة لسه.</p>'}</div>
     <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
   sheet.querySelector('[data-close]').onclick = () => close();
-  // 6.0: each line opens its topic folder in that chapter
+  // 6.0: each line opens its folder in that chapter
   sheet.querySelectorAll('[data-cs]').forEach(b => b.onclick = () => {
     const t = b.dataset.cs, ch = b.dataset.ch, parts = b.dataset.parts ? b.dataset.parts.split(',') : undefined; close();
     setTimeout(() => goFolder(t, { chapter: ch, parts }), 200);
@@ -2849,6 +2911,13 @@ function chapRecheck(c) {
   const names = new Set((c.chapters || []).map(x => x.name));
   return S.rows.filter(r => S.topicR.has(r.qid) && names.has(r.chapter)).length;
 }
+// 6.1 (owner 11/10): topics finished = confirmed with nothing waiting (no extra suggestion, no check after an edit), as in "مواضيعها متأكدة ✅"
+function chapRecheckOnly(c) {
+  if (!S.topicR || !S.topicR.size) return 0;
+  const names = new Set((c.chapters || []).map(x => x.name));
+  return S.rows.filter(r => S.topicR.has(r.qid) && names.has(r.chapter) && !(S.topicS && S.topicS.has(r.qid))).length;
+}
+const topicDone = c => { const n = k => Number(c[k]) || 0; return Math.max(0, n('topics_confirmed') - n('topics_pending_change') - chapRecheckOnly(c)); };
 // 5.9: page images still missing count as work too (step 1 from the upload on)
 function chapWork(c) { const n = k => Number(c[k]) || 0; return (!!c.batch_id && n('total') === 0) || n('page_count') > n('pages_done') || n('unsolved') + n('awaiting_reason') + n('awaiting_rebuild') + n('in_review') + n('revised') + n('open_requests') + n('consistency_checks') > 0 || (n('total') > 0 && topicLeft(c) + chapRecheck(c) > 0); }
 const chapDone = c => Number(c.total) > 0 && Number(c.approved) === Number(c.total) && !chapWork(c);
@@ -2861,7 +2930,7 @@ function chapterCardsHTML(list) {
 function chapterCard(c) {
   const n = k => Number(c[k]) || 0;
   const b = c.batch_id, key = `r${Number(c.run_id)}`;
-  const solveN = n('unsolved') + n('awaiting_reason'), revN = n('open_requests') + n('consistency_checks'), reviewN = n('in_review') + n('revised');
+  const solveN = n('unsolved') + n('awaiting_reason'), revN = n('open_requests') + n('consistency_checks');
   if (b) { S.copyMsgs[`x${key}`] = msgExtract(b, c.file_name || ''); S.copyMsgs[`s${key}`] = msgSolveBatch(b); }
   const chats = Math.ceil(n('unsolved') / 15);
   const pagesLeft = Math.max(0, n('page_count') - n('pages_done'));
@@ -2878,27 +2947,22 @@ function chapterCard(c) {
       btn: solveN ? `<button class="btn primary" data-copy="${b ? `s${key}` : 'solve'}">انسخ رسالة الحل</button>${OPEN_CLAUDE}` : '' },
     ...(c.topics_confirmed === undefined ? [] : [(() => {
       const none = Math.max(0, n('total') - n('topics_confirmed') - n('topics_suggested'));
-      const sug = n('topics_suggested'), pc = n('topics_pending_change'), re = chapRecheck(c), wait = sug + none;
+      const sug = n('topics_suggested'), pc = n('topics_pending_change'), re = chapRecheck(c);
       S.copyMsgs[`t${key}`] = msgTopics(c);
       const chs = (c.chapters || []).map(x => `<a class="btn sec small" href="#topics/${Number(x.id)}" title="${esc(x.name)} (${Number(x.n)})">🏷️ ${esc(x.name)} (${Number(x.n)})</a>`).join('');
-      // 5.8: suggested topics wait for a reviewer's confirmation; the step is suggested once the review and the revisions are done
-      const work = n('total') > 0 && solveN === 0 && (none > 0 || (sug + pc + re > 0 && reviewN === 0 && revN === 0)), left = n('total') ? topicLeft(c) + re : 0;
-      return { id: 'topics', name: 'مواضيع', work, left,
-        wait: !work && left ? (solveN ? 'بعد الحل' : reviewN || revN ? 'بعد المراجعة والتعديلات' : '') : '',
-        text: n('total') ? [`${n('topics_confirmed')} متأكد من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '',
+      // 6.1 (owner 11/10): the admin panel holds the preparation only: here the classification (questions with no topic yet);
+      // confirming the suggested topics is the reviewers' work (their side), so it is shown as a count with no button
+      const work = n('total') > 0 && solveN === 0 && none > 0, left = n('total') ? none : 0;
+      return { id: 'topics', name: 'تصنيف المواضيع', work, left, ok: none === 0,
+        wait: !work && left && solveN ? 'بعد الحل' : '',
+        text: n('total') ? [`${topicDone(c)} متأكد ومفيش عليه حاجة من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '',
           pc ? `${pc} متأكد وعليه اقتراح زيادة` : '', re ? `${re} محتاجة تتراجع بعد تعديل السؤال` : ''].filter(Boolean).join(' · ') : 'بعد الاستخراج والحل',
-        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${wait ? `<button class="btn${none ? ' sec' : ' primary'}" type="button" data-gofolder="untopic">افتح المستني (${wait})</button>` : ''}${pc ? `<button class="btn sec" type="button" data-gofolder="topicwait" data-parts="extra">افتح اقتراح الزيادة (${pc})</button>` : ''}${re ? `<button class="btn sec" type="button" data-gofolder="topicwait" data-parts="recheck">افتح "محتاجة تتراجع بعد تعديل السؤال" (${re})</button>` : ''}${chs}` : '' };
+        btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${chs}` : '' };
     })()]),
-    { id: 'rebuild', name: 'إعادة تركيب', work: n('awaiting_rebuild') > 0, left: n('awaiting_rebuild'),
-      text: n('awaiting_rebuild') ? `${n('awaiting_rebuild')} ينتظر إعادة التركيب` : 'لا شيء',
-      btn: n('awaiting_rebuild') ? '<button class="btn sec" data-gofolder="rebuild">افتح الفولدر</button>' : '' },
-    { id: 'review', name: 'مراجعة', work: reviewN > 0, left: reviewN,
-      text: reviewN ? `${reviewN} ينتظر المراجعة` : 'لا شيء',
-      btn: reviewN ? '<button class="btn sec" data-gofolder="todo">افتح الفولدر</button>' : '' },
     { id: 'revise', name: 'تعديلات', work: revN > 0, left: revN,
       text: revN ? `${n('open_requests')} طلب تعديل مفتوح${n('consistency_checks') ? `، و${n('consistency_checks')} عُدّل سريعًا يحتاج مراجعة اتساق` : ''}` : 'لا شيء',
       btn: revN ? `<button class="btn primary" data-copy="revise">انسخ رسالة التعديلات</button>${OPEN_CLAUDE}` : '' },
-    { id: 'done', name: 'خلاصة', work: false, text: !n('total') ? 'بعد الاستخراج' : `معتمد ${n('approved')} من ${n('total')}${c.topics_confirmed === undefined ? '' : `، ومواضيع متأكدة ${n('topics_confirmed')} من ${n('total')}`}`, btn: '' },
+    { id: 'done', name: 'خلاصة', work: false, text: !n('total') ? 'بعد الاستخراج' : `معتمد ${n('approved')} من ${n('total')}${c.topics_confirmed === undefined ? '' : `، ومواضيع متأكدة ${topicDone(c)} من ${n('total')}`}`, btn: '' },
   ];
   const fin = chapDone(c);
   const rec = (steps.find(s => s.work) || {}).id;
@@ -2909,8 +2973,8 @@ function chapterCard(c) {
   const recStep = steps.find(s => s.id === rec);
   // 5.9: each step has a round mark: ✓ when done, its number otherwise; only the step for now is filled (its mark and its main button), so one thing is asked at a time
   const tot = n('total') > 0;
-  const okOf = s => s.id === 'pages' ? pagesLeft === 0 && (n('page_count') > 0 || tot) : tot && !s.work && !!({ extract: true, solve: solveN === 0 && n('unsolved') === 0, topics: c.topics_confirmed === undefined || (topicLeft(c) === 0 && chapRecheck(c) === 0),
-    rebuild: n('awaiting_rebuild') === 0, review: reviewN === 0, revise: revN === 0, done: fin })[s.id];
+  const okOf = s => s.id === 'pages' ? pagesLeft === 0 && (n('page_count') > 0 || tot) : tot && !s.work && !!({ extract: true, solve: solveN === 0 && n('unsolved') === 0, topics: c.topics_confirmed === undefined || s.ok,
+    revise: revN === 0, done: fin })[s.id];
   const stOf = s => okOf(s) ? 'ok' : s.id === rec ? 'now' : s.work ? 'next' : 'wait';
   const ST_L = { ok: 'خلصت', now: 'دلوقتي', next: 'فيها شغل بعد اللي دلوقتي', wait: 'لسه' };
   // 5.9 (owner 8/10): where the chapter stands from the upload on, the same marks as the steps inside, then what is left in their order
@@ -2918,8 +2982,9 @@ function chapterCard(c) {
   // the step for now is the one pill in the list ("دلوقتي: حل 12"); each item stays whole on one line
   const leftItems = steps.filter(s => s.left).map(s => { const t = s.left === true ? s.name : `${s.name} ${s.left}`; return s.id === rec ? `<span class="tag cobalt now">دلوقتي: ${t}</span>` : `<span class="li">${t}</span>`; });
   const sumLine = fin ? '<span class="tag ok">✅ اكتمل</span> <span class="muted">مفيش باقي</span>'
-    : leftItems.length ? `<span class="left-h">📋 الباقي:</span> ${leftItems.join('<span class="sep"> · </span>')}` : recStep ? `<span class="tag cobalt now">دلوقتي: ${recStep.name}</span>` : '';
-  const bars = tot ? `<div class="chap-bars">${progBar('الاعتماد', n('approved'), n('total'), 'a')}${c.topics_confirmed === undefined ? '' : progBar('المواضيع', n('topics_confirmed'), n('total'), 't')}</div>` : '';
+    : leftItems.length ? `<span class="left-h">📋 الباقي:</span> ${leftItems.join('<span class="sep"> · </span>')}` : recStep ? `<span class="tag cobalt now">دلوقتي: ${recStep.name}</span>`
+    : tot ? '<span class="tag">⏳ مستني المراجعين</span> <span class="muted">مفيش مطلوب من الإدارة دلوقتي</span>' : '';   // 6.1: only reviewer work is left (their side)
+  const bars = tot ? `<div class="chap-bars">${progBar('الاعتماد', n('approved'), n('total'), 'a')}${c.topics_confirmed === undefined ? '' : progBar('المواضيع', topicDone(c), n('total'), 't')}</div>` : '';
   const isOpen = chapOpen().includes(Number(c.run_id));
   const tagOf = (s, st) => st === 'now' ? ' <span class="tag cobalt">دلوقتي</span>' : st === 'next' ? ' <span class="tag">بعدها</span>' : st === 'wait' && s.wait ? ` <span class="tag">${s.wait}</span>` : '';
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
