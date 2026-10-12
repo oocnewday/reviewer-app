@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.1';
-const APP_BUILD = '11/10/2026';
+const APP_VERSION = '6.3';
+const APP_BUILD = '12/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -2984,12 +2984,23 @@ function chapterCard(c) {
   const sumLine = fin ? '<span class="tag ok">✅ اكتمل</span> <span class="muted">مفيش باقي</span>'
     : leftItems.length ? `<span class="left-h">📋 الباقي:</span> ${leftItems.join('<span class="sep"> · </span>')}` : recStep ? `<span class="tag cobalt now">دلوقتي: ${recStep.name}</span>`
     : tot ? '<span class="tag">⏳ مستني المراجعين</span> <span class="muted">مفيش مطلوب من الإدارة دلوقتي</span>' : '';   // 6.1: only reviewer work is left (their side)
+  // 6.3 (owner 12/10): where every question of the file is now, for information only (no buttons), straight from the bank, so the numbers
+  // add up to the total at a glance ("حل 213" next to 231 extracted); the reviewers' share is marked as theirs. Missing fields (an older
+  // server): no line. Anything outside these states shows as "حالة تانية", so the sum always equals the total.
+  const dist = (() => {
+    if (!tot || ['unsolved', 'in_review', 'approved'].some(k => c[k] === undefined)) return '';
+    const parts = [[n('unsolved') + n('awaiting_reason'), 'مستنية الحل'], [n('in_review') + n('revised') + n('needs_revision'), 'في المراجعة'],
+      [n('awaiting_rebuild'), 'مستنية إعادة تركيب (عند المراجعين)']];
+    const other = n('total') - parts.reduce((x, [v]) => x + v, 0) - n('approved');
+    const items = [...parts.filter(([v]) => v > 0), [n('approved'), 'معتمدة'], ...(other > 0 ? [[other, 'حالة تانية']] : [])];
+    return `<div class="chap-dist small"><span class="dist-h">منهم:</span>${items.map(([v, l]) => `<span class="dp"><b>${v}</b> ${l}</span>`).join('')}<span class="dist-t">= ${n('total')} سؤال</span></div>`;   // grey labels, no buttons
+  })();
   const bars = tot ? `<div class="chap-bars">${progBar('الاعتماد', n('approved'), n('total'), 'a')}${c.topics_confirmed === undefined ? '' : progBar('المواضيع', topicDone(c), n('total'), 't')}</div>` : '';
   const isOpen = chapOpen().includes(Number(c.run_id));
   const tagOf = (s, st) => st === 'now' ? ' <span class="tag cobalt">دلوقتي</span>' : st === 'next' ? ' <span class="tag">بعدها</span>' : st === 'wait' && s.wait ? ` <span class="tag">${s.wait}</span>` : '';
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
     <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>
-      ${trk}<div class="chap-sum small">${sumLine}</div>${bars}</summary>
+      ${trk}<div class="chap-sum small">${sumLine}</div>${bars}${dist}</summary>
     ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
     <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>

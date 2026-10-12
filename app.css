@@ -816,3 +816,9 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .cs-act.lps{margin-top:8px;gap:6px}
 .sc-done.wait{background:var(--paper);color:var(--ink-2);font-weight:600}
 .cs-note{margin:6px 0 0}
+/* 6.3: where every question of the chapter file is now, for information only: grey labels that wrap whole, then the total */
+.staff .chap-dist{display:flex;flex-wrap:wrap;align-items:center;gap:5px 6px;margin:8px 0 2px;color:var(--ink-2);line-height:1.4}
+.staff .chap-dist .dist-h{font-weight:600;color:var(--ink)}
+.staff .chap-dist .dp{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;background:var(--line-2);white-space:nowrap}
+.staff .chap-dist .dp b{color:var(--ink);font-variant-numeric:tabular-nums}
+.staff .chap-dist .dist-t{white-space:nowrap;font-weight:700;color:var(--ink)}
