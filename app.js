@@ -14,7 +14,7 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.3';
+const APP_VERSION = '6.4';
 const APP_BUILD = '12/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -404,6 +404,17 @@ const TP = {
   recheck: r => !!(S.topicR && S.topicR.has(r.qid)),
 };
 const TPARTS = [['first', 'لأول مرة'], ['extra', 'موضوع زيادة مقترح من Claude'], ['recheck', 'محتاجة تتراجع بعد تعديل السؤال']];
+/* 6.4 (owner 12/10): folders that mix kinds the reviewer could not tell apart inside the folder (an approved question with an
+   alert next to one still waiting, say) get one row of choices above the list: «الكل» or one kind, with its count. One choice
+   at a time (a beginner taps what he wants to see); the kinds add up to the folder. "مستنية تأكيدك" keeps its own parts. */
+const FPARTS = {
+  alerts: [['al_open', 'لم تُعتمد', r => r.status !== 'approved'], ['al_appr', 'معتمدة', r => r.status === 'approved']],
+  notappr: [['na_dec', 'مستنية قرارك', r => r.status === 'in_review' || r.status === 'revised'], ['na_edit', 'مستنية التعديل', r => r.status !== 'in_review' && r.status !== 'revised']],
+  untopic: [['ut_wait', 'مستنية تأكيدك', r => TPARTS.some(([k]) => TP[k](r))], ['ut_none', 'مالهاش موضوع لسه', r => !TPARTS.some(([k]) => TP[k](r)), 'مالهاش موضوع']],
+  notes: [['nt_pub', 'منشورة للطلاب', r => r.note_state === 'published'], ['nt_pend', 'مستنية الاعتماد', r => r.note_state === 'pending'], ['nt_req', 'في طلب تعديل', r => r.note_state === 'in_request']],
+};
+const partOf = (v = S.view, folder = v && v.folder) => (FPARTS[folder] || []).find(p => p[0] === (v && v.part)) || null;
+const listName = (v = S.view, folder = v.folder) => { const p = partOf(v, folder); return folderName(folder) + (p ? ' – ' + p[1] : ''); };
 const tpartsOn = (v = S.view) => { const on = (Array.isArray(v && v.tparts) ? v.tparts : []).filter(k => TP[k]); return on.length ? on : TPARTS.map(x => x[0]); };
 // 6.0: the hidden reasons shown under "🙈 المخفي عن الطلاب" (always these four; a rarer one shows only while some question has it)
 const HID_MAIN = [['hidden_low_confidence', 'ثقة منخفضة'], ['hidden_disagree', 'مختلف مع المصدر'], ['hidden_incomplete', 'ناقص في المصدر'], ['hidden_answer_fix', 'المراجع طلب تغيير الإجابة']];
@@ -411,9 +422,10 @@ const reasonLabel = k => (HID_MAIN.find(x => x[0] === k) || [])[1] || hiddenLabe
 /* 6.0 (owner 9/10): what every folder, filter and card holds and what the reviewer does there, in plain words, behind a book
    button; written for a beginner. "todo" = an action is asked of him; "free" = nothing is asked (shown in green). */
 const INFO = {
-  notappr: { what: 'كل سؤال وصل للمراجعة ولسه ماتعتمدش، أيًا كانت حالته: مستني مراجعة، أو مستني تعديل، أو اتعدّل ومستني اعتماد.', todo: 'افتحه وشوف هو واقف فين، وكمّل اللي عليك فيه.' },
+  notappr: { what: 'كل سؤال وصل للمراجعة ولسه ماتعتمدش، أيًا كانت حالته: مستني مراجعة، أو مستني تعديل، أو اتعدّل ومستني اعتماد.', todo: 'افتحه وشوف هو واقف فين، وكمّل اللي عليك فيه.',
+    tip: 'لما تفتح المربع، فوق القايمة تقدر تختار «مستنية قرارك» (تعتمدها أو تطلب تعديل) أو «مستنية التعديل» (مفيش مطلوب منك لحد ما تتعدّل). ولو مفيش حاجة مستنية قرارك، المربع بيبقى أخضر فاتح.' },
   untopic: { what: 'أسئلة مواضيعها لسه ماخلصتش: ماتأكدتش، أو متأكدة وعليها حاجة مستنية (موضوع زيادة مقترح، أو السؤال اتعدّل بعد التأكيد). الطلاب مابيشوفوش غير الموضوع المتأكد.', todo: 'لو ليها موضوع مقترح: افتح السؤال واضغط «✓ تأكيد» (أو «✓ لسه مناسبة» لو اتعدّل بعد التأكيد). ولو مالهاش موضوع خالص: الإدارة بتشغّل محادثة التصنيف الأول.',
-    tip: 'العدد هنا + «مواضيعها متأكدة ✅» = كل الأسئلة، وده نفس شريط «المواضيع» في كارت الشابتر.' },
+    tip: 'العدد هنا + «مواضيعها متأكدة ✅» = كل الأسئلة، وده نفس شريط «المواضيع» في كارت الشابتر. ولما تفتح المربع، فوق القايمة تقدر تختار «مستنية تأكيدك» أو «مالهاش موضوع لسه».' },
   // 6.1 (owner 11/10): the three kinds that add up to the count, also written small inside the tile
   todo: { what: 'كل الأسئلة اللي مستنية قرار مراجع، وهي 3 أنواع:', list: ['<b>لم تُفتح:</b> في المراجعة وانت لسه مافتحتهاش.', '<b>فُتحت بلا قرار:</b> فتحتها ولسه ماخدتش قرار.', '<b>رجعت بعد التعديل:</b> Claude عدّلها بعد طلب تعديل، أو مراجع عدّلها تعديل سريع. ودي مربعاتها في «✏️ التعديلات».'],
     todo: 'افتح السؤال، واعتمده لو تمام، أو اطلب تعديل.', tip: 'الرقم هنا هو مجموع التلاتة، ومكتوب بخط صغير تحت اسم المربع.' },
@@ -433,8 +445,9 @@ const INFO = {
   quick: { what: 'أسئلة مراجع عدّلها بالتعديل السريع.', todo: 'راجع التعديل، واعتمده أو اطلب تعديل.' },
   approved: { what: 'أسئلة اتعتمدت.', free: 'مفيش مطلوب منك.' },
   alerts: { what: 'أسئلة عليها ملاحظة «⚠️ للمراجع» من الاستخراج، زي: إجابة المصدر، أو سؤال ناقص، أو تصليح كتابة.', todo: 'لو السؤال لسه في المراجعة: اقرا التنبيه في صفحة السؤال قبل ما تقرر. ولو اتعتمد: للاطلاع بس، ومفيش مطلوب منك.',
-    tip: 'التنبيه بيفضل على السؤال حتى بعد الاعتماد، وتحت اسم المربع مكتوب كام واحد اتعتمد وكام لسه.' },
-  notes: { what: 'أسئلة عليها ملاحظة مكتوبة للطلاب: منشورة، أو مستنية الاعتماد، أو جوه طلب تعديل.', free: 'للاطلاع.' },
+    tip: 'التنبيه بيفضل على السؤال حتى بعد الاعتماد، وتحت اسم المربع مكتوب كام واحد اتعتمد وكام لسه. ولما تفتح المربع، فوق القايمة تقدر تختار «لم تُعتمد» بس أو «معتمدة» بس.' },
+  notes: { what: 'أسئلة عليها ملاحظة مكتوبة للطلاب: منشورة، أو مستنية الاعتماد، أو جوه طلب تعديل.', free: 'للاطلاع.',
+    tip: 'لما تفتح المربع، فوق القايمة تقدر تختار نوع واحد: منشورة للطلاب، أو مستنية الاعتماد، أو في طلب تعديل.' },
   all: { what: 'كل الأسئلة في الشابتر اللي اخترته فوق.', free: 'للبحث والرجوع لأي سؤال.' },
   topicre: { what: 'أسئلة مواضيعها اتأكدت، وبعدين السؤال نفسه اتعدّل.', todo: 'افتح السؤال، واضغط «✓ لسه مناسبة» أو «تغيير».' },
   action: { name: '📋 المطلوب منك', what: 'كل الحاجات اللي مستنية منك إجراء، في كل الشباتر، في مكان واحد وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يفتحلك أسئلته على طول.',
@@ -453,7 +466,7 @@ const CONF_RANK = { low: 0, medium: 1, high: 2 };
 const VIEW_KEY = () => `view:${S.session?.user?.id}`;
 function loadView() {
   let v = {}; try { v = JSON.parse(localStorage.getItem(VIEW_KEY()) || '{}'); } catch { }
-  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hidOff: [], tparts: [], showFilters: false, ...v };
+  return { folder: 'todo', sort: 'priority', conf: 'all', disagree: false, incomplete: false, chapter: 'all', hidden: false, hidOff: [], tparts: [], part: '', showFilters: false, ...v };
 }
 function saveView() { try { localStorage.setItem(VIEW_KEY(), JSON.stringify(S.view)); } catch { } }
 /* 4.1: two more list filters, in the interface only (integration_backlog 31, 32).
@@ -492,6 +505,7 @@ function fixView() {
   if (v.hiddenKind !== undefined) { v.hidOff = v.hiddenKind && v.hiddenKind !== 'all' ? hiddenKinds().filter(k => k !== v.hiddenKind) : []; delete v.hiddenKind; changed = true; }
   if (v.folder === 'topicre') { v.folder = 'topicwait'; v.tparts = ['recheck']; changed = true; }
   if (!Array.isArray(v.hidOff)) { v.hidOff = []; changed = true; }
+  if (v.part && !partOf(v)) { v.part = ''; changed = true; }   // 6.4
   if (!FOLDERS.some(f => f.id === v.folder) || (!S.topicC && ['untopic', 'topicwait', 'notopic', 'topicok'].includes(v.folder))) { v.folder = 'todo'; changed = true; }
   if (changed) saveView();
 }
@@ -518,15 +532,23 @@ const HOT = new Set(['todo', 'new', 'seen', 'drafts', 'rebuild', 'dups', 'topicw
 const DONE = new Set(['approved', 'topicok']);   // a green count: work that is finished
 // 6.1 (owner 11/10): tiles that are for information only (nothing is asked there) are light green; "فيها تنبيه" only while all of its questions are approved
 const INFO_ONLY = new Set(['notopic', 'topicok', 'requested', 'approved', 'notes', 'all']);
-const infoOnly = (id, subs) => INFO_ONLY.has(id) || (id === 'alerts' && !(subs.alertsOpen > 0));
+// 6.4: «لم تُعتمد» and «لم تتأكد مواضيعها» are for information too while nothing in them waits for the reviewer
+const infoOnly = (id, subs) => INFO_ONLY.has(id) || (id === 'alerts' && !(subs.alertsOpen > 0)) || (id === 'notappr' && !(subs.notapprOpen > 0)) || (id === 'untopic' && !(subs.untopicOpen > 0));
 const TILE_LABEL = { rebuild: 'إعادة تركيب 🛠️', dups: 'محتمل مكرر 🔁', notes: 'ملاحظات للطلاب', approved: 'معتمدة ✅' };   // shorter on the tile; the list title keeps the full name
 const folderName = id => TILE_LABEL[id] || (FOLDERS.find(f => f.id === id) || {}).label || '';
 // 6.1 (owner 11/10): small text inside a tile that says what its count is made of (only while the count is above 0)
+// 6.4: the small text of a mixed folder = its kinds with their counts; the first kind is the one that waits for the reviewer
+function partSubs(rows, id) {
+  const f = FOLDERS.find(x => x.id === id), inF = rows.filter(f.test), ns = FPARTS[id].map(([, l, t, short]) => [short || l, inF.filter(t).length]);   // a shorter name fits the tile
+  // each kind on its own line; on a narrow tile its words wrap, but the number stays with the last word (no overlap with the book)
+  return { [id]: ns.map(([l, n]) => `${l}\u00a0${n}`), [id + 'Open']: ns[0][1], [id + 'Wrap']: true };
+}
 function tileSubs(rows) {
   const n = t => rows.filter(t).length, al = rows.filter(r => r.alert_kinds && r.alert_kinds.length), alOpen = al.filter(r => r.status !== 'approved').length;
   return {
     todo: [`لم تُفتح ${n(r => r.status === 'in_review' && !r.seen)}`, `بلا قرار ${n(r => r.status === 'in_review' && r.seen)}`, `بعد التعديل ${n(r => r.status === 'revised')}`],
     alerts: [`معتمدة ${al.length - alOpen}`, `لم تُعتمد ${alOpen}`], alertsOpen: alOpen,
+    ...partSubs(rows, 'notappr'), ...(S.topicC ? partSubs(rows, 'untopic') : {}),   // 6.4
   };
 }
 function folderGrid(v, counts, subs = {}) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
@@ -535,10 +557,19 @@ function folderGrid(v, counts, subs = {}) {   // 5.5 (owner 6/10): every folder 
     const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (S.topicC || !TOPIC_FOLDERS.includes(f.id)));   // no topic tiles before migration 048
     if (!tiles.length) return '';
     const head = ids.includes('topicwait') ? `${title} ${one ? 'الشابتر' : 'الشباتر'}` : title;
-    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id), s = n && Array.isArray(subs[f.id]) ? subs[f.id].map((x, i, a) => `<span class="nw">${esc(x)}${i < a.length - 1 ? ' +' : ''}</span>`).join(' ') : '';
-      return `<div class="ftile${n ? '' : ' zero'}${n && HOT.has(f.id) ? ' hot' : ''}${n && DONE.has(f.id) ? ' done' : ''}${infoOnly(f.id, subs) ? ' info-t' : ''}" data-on="${on}"><button class="ft-main" type="button" data-folder="${f.id}" aria-pressed="${on}"><span class="ft-l">${esc(name)}${s ? `<span class="ft-s">${s}</span>` : ''}</span><span class="ft-n">${n}</span></button>${infoBtn(f.id, name)}</div>`; };
+    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id), s = n && Array.isArray(subs[f.id]) ? subs[f.id].map((x, i, a) => `<span class="nw${subs[f.id + 'Wrap'] ? ' wr' : ''}">${esc(x)}${i < a.length - 1 ? '\u00a0+' : ''}</span>`).join(' ') : '';
+      return `<div class="ftile${n ? '' : ' zero'}${n && HOT.has(f.id) && !infoOnly(f.id, subs) ? ' hot' : ''}${n && DONE.has(f.id) ? ' done' : ''}${infoOnly(f.id, subs) ? ' info-t' : ''}" data-on="${on}"><button class="ft-main" type="button" data-folder="${f.id}" aria-pressed="${on}"><span class="ft-l">${esc(name)}${s ? `<span class="ft-s">${s}</span>` : ''}</span><span class="ft-n">${n}</span></button>${infoBtn(f.id, name)}</div>`; };
     return `<section class="fgroup" aria-label="${esc(head)}"><div class="fg-h">${esc(head)}</div><p class="fg-s">${esc(sub)}</p><div class="fg">${tiles.map(tile).join('')}</div></section>`;
   }).join('')}</nav>`;
+}
+// 6.4: the kinds of a mixed folder, right above its list: «الكل» or one kind (one choice, a kind at 0 can't be picked)
+function folderParts(v) {
+  const parts = FPARTS[v.folder], f = FOLDERS.find(x => x.id === v.folder);
+  if (!parts || !f || (v.folder === 'untopic' && !S.topicC)) return '';
+  const base = inScope(S.rows).filter(f.test); if (!base.length) return '';
+  const cur = partOf(v) ? v.part : '';
+  const b = (k, l, n, wide) => `<button class="fopt${wide ? ' wide' : ''}" type="button" data-part="${k}" aria-pressed="${cur === k}"${!n && cur !== k ? ' disabled' : ''}><span class="fo-l">${esc(l)}</span><span class="fo-n">${n}</span></button>`;
+  return `<div class="parts" role="group" aria-label="${esc('اعرض من ' + folderName(v.folder))}"><p class="parts-h">اعرض: (اختار نوع واحد، أو «الكل»)</p><div class="fopts">${b('', 'الكل', base.length, parts.length % 2 === 0)}${parts.map(([k, l, t]) => b(k, l, base.filter(t).length)).join('')}</div></div>`;
 }
 // 6.0: the three parts of "مستنية تأكيدك", lit when the folder opens, right above its list; each one switches off and on (never all off)
 function topicParts(v) {
@@ -566,7 +597,7 @@ function todoButton() {
 }
 // open a folder from anywhere (the actions sheet, the admin panel, the chapter summary): optional parts, chapter and a clean filter
 function goFolder(folder, { parts, chapter = 'all', clear = true } = {}) {
-  S.view = { ...S.view, ...(clear ? NO_FILTERS : {}), folder, chapter: chapter && chapter !== 'all' && chapterList().includes(chapter) ? chapter : 'all', tparts: parts || [] };
+  S.view = { ...S.view, ...(clear ? NO_FILTERS : {}), folder, chapter: chapter && chapter !== 'all' && chapterList().includes(chapter) ? chapter : 'all', tparts: parts || [], part: '' };
   saveView(); S.listLimit = 60; closeSheets(); renderQueue(); toList();
 }
 // 6.0: the list sits under the folder groups, so opening a folder slides the page down to it (and "⬆ الفولدرات" goes back)
@@ -678,7 +709,7 @@ function filtersPanel(v) {
   const hid = applyFilters(base, { ...v, hidden: false }).filter(isHidden), hN = countBy(hid, r => r.student_state), off = new Set(v.hidOff || []);
   const kinds = [...HID_MAIN.map(x => x[0]), ...hiddenKinds().filter(k => !HID_MAIN.some(x => x[0] === k))];
   const reasons = v.hidden ? `<div class="parts" role="group" aria-label="أسباب الإخفاء"><p class="parts-h">مخفي بسبب: (اضغط على أي سبب تشيله أو ترجّعه)</p><div class="fopts">${kinds.map(k => opt('data-hid', k, esc(reasonLabel(k)), hN[k] || 0, !off.has(k) && (hN[k] || 0) > 0)).join('')}</div></div>` : '';
-  const where = `🔍 بتدوّر جوه: <b>«${esc(folderName(v.folder))}»</b> ${v.chapter && v.chapter !== 'all' ? `في <bdi>${esc(v.chapter)}</bdi>` : 'في كل الشباتر'} – <b>${base.length} سؤال</b>`;
+  const where = `🔍 بتدوّر جوه: <b>«${esc(listName(v))}»</b> ${v.chapter && v.chapter !== 'all' ? `في <bdi>${esc(v.chapter)}</bdi>` : 'في كل الشباتر'} – <b>${base.length} سؤال</b>`;
   return `<div class="filters">
     <div class="where">${where}</div>
     <div class="fsec">${head('hidden', 'اضغطه، وأسباب الإخفاء تنوّر تحته بأرقامها.')}<div class="fopts">${opt('data-fhid', '1', '🙈 المخفي عن الطلاب', hid.length, !!v.hidden, true)}</div>${reasons}</div>
@@ -702,6 +733,7 @@ function listFor(view = S.view) {
   const f = FOLDERS.find(x => x.id === view.folder) || FOLDERS[0];
   let rows = S.rows.filter(f.test);
   if (f.id === 'topicwait') { const on = tpartsOn(view); rows = rows.filter(r => on.some(k => TP[k](r))); }   // 6.0: the parts left on
+  const fp = partOf(view, f.id); if (fp) rows = rows.filter(fp[2]);   // 6.4: one kind of a mixed folder
   rows = applyFilters(rows, view);
   const cr = r => CONF_RANK[r.ai_confidence] ?? 1;
   const by = {
@@ -855,7 +887,7 @@ function renderQueue() {
   const shown = list.slice(0, S.listLimit || 60);
   const items = isRb ? shown.map(rbItem).join('') : shown.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
-      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, v.folder === 'all')}</div>${studentLine(r.student_state)}${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
+      <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, ['all', 'alerts', 'notappr'].includes(v.folder))}</div>${studentLine(r.student_state)}${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
     </a></li>`).join('');
   $app.innerHTML = topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span>${installBtn()}<span class="small muted who">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`) + `
   <main class="wrap">
@@ -868,6 +900,7 @@ function renderQueue() {
     <button class="guide-all" type="button" id="guide-all">${BOOK}<span>اقرا شرح كل الفولدرات والفلاتر مرة واحدة</span></button>
     ${!isRb && leadOf(v.folder) ? `<p class="hint rb-lead f-lead">${esc(leadOf(v.folder))}</p>` : ''}
     ${v.folder === 'topicwait' && S.topicC ? topicParts(v) : ''}
+    ${folderParts(v)}
     ${isRb ? `<p class="hint rb-lead">أسئلة لسه ماتحلّتش، وفيها مشكلة بتمنع حلها. اكتب نصها واختياراتها من مرجع موثوق، وبعدها بترجع للحل المعزول لوحدها.</p>` : `<div class="tools">
       <select class="t" id="sort" aria-label="الترتيب">${Object.entries(SORTS).map(([k, l]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <button class="btn${activeFilters ? ' f-on' : ''}" id="tog-f" aria-expanded="${v.showFilters}">🔍 تصفية القايمة${activeFilters ? ` (${activeFilters})` : ''} <span aria-hidden="true">${v.showFilters ? '▴' : '▾'}</span></button>
@@ -875,10 +908,10 @@ function renderQueue() {
     ${!v.showFilters && !fhintDone() ? `<p class="hint fhint" id="fhint"><span>🔍 <b>تصفية القايمة</b>: جوّه الفولدر اللي فاتحه، اختار المخفي عن الطلاب وأسبابه، أو ثقة Claude، أو المقارنة بملف المصدر.</span><button class="linkbtn quiet" type="button" id="fhint-x" aria-label="إخفاء الشرح">✕</button></p>` : ''}
     ${v.showFilters ? filtersPanel(v) : ''}`}
     ${activeFilters ? activeLine(v) : ''}
-    <div class="qhead"><h2>${esc(folderName(v.folder))}</h2><span class="count"><button class="linkbtn small" type="button" id="to-folders">⬆ الفولدرات</button> ${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
+    <div class="qhead"><h2>${esc(listName(v))}</h2><span class="count"><button class="linkbtn small" type="button" id="to-folders">⬆ الفولدرات</button> ${list.length} سؤال <button class="linkbtn quiet small" id="reload" title="تحديث القائمة" aria-label="تحديث القائمة">🔄</button></span></div>
     ${list.length ? `<ul class="qlist">${items}</ul>${list.length > shown.length ? `<p><button class="btn block" id="more-q">عرض المزيد (${list.length - shown.length})</button></p>` : ''}
       <p style="margin-top:16px"><a class="btn primary block" href="#${isRb ? 'rebuild' : 'q'}/${list[0].qid}">ابدأ من أول سؤال في القائمة</a></p>`
-      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : !activeFilters && FOLDER_EMPTY[v.folder] ? FOLDER_EMPTY[v.folder] : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
+      : `<div class="empty"><p>${isRb ? 'مفيش أسئلة مستنية إعادة تركيب.' : v.folder === 'dups' && !activeFilters ? 'مفيش أسئلة مستنية قرار التكرار.' : v.folder === 'drafts' && !activeFilters ? 'مفيش مسودات مستنية الإرسال.' : !activeFilters && !partOf(v) && FOLDER_EMPTY[v.folder] ? FOLDER_EMPTY[v.folder] : `لا توجد أسئلة هنا${activeFilters ? ' بهذه التصفية' : ''}.`}</p><button class="btn" id="refresh">تحديث</button></div>`}
     ${installListCard()}
     ${appFooter()}
   </main>`;
@@ -890,7 +923,7 @@ function renderQueue() {
   const set = patch => { Object.assign(S.view, patch); saveView(); S.listLimit = 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
   // 6.0: a tile opens its folder (a topic folder with every part on) and slides down to its list
   $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => {
-    if (b.dataset.folder !== v.folder) { Object.assign(S.view, { folder: b.dataset.folder, tparts: [] }); saveView(); S.listLimit = 60; renderQueue(); }
+    if (b.dataset.folder !== v.folder) { Object.assign(S.view, { folder: b.dataset.folder, tparts: [], part: '' }); saveView(); S.listLimit = 60; renderQueue(); }
     toList();
   });
   const tf2 = document.getElementById('to-folders'); if (tf2) tf2.onclick = () => document.querySelector('.fgrid')?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
@@ -914,6 +947,7 @@ function renderQueue() {
     if (on.has(k)) { if (on.size === 1) return toast('لازم يفضل نوع واحد على الأقل.'); on.delete(k); } else on.add(k);
     set({ tparts: on.size === TPARTS.length ? [] : [...on] });
   });
+  $app.querySelectorAll('[data-part]').forEach(b => b.onclick = () => set({ part: b.dataset.part }));   // 6.4
   $app.querySelectorAll('[data-fclear]').forEach(b => b.onclick = () => set({ ...NO_FILTERS, chapter: v.chapter }));   // 5.9: the chapter stays
   $app.querySelectorAll('[data-info]').forEach(b => b.onclick = () => explain(b.dataset.info));
   const ta = document.getElementById('todo-open'); if (ta) ta.onclick = openActions;
@@ -2044,7 +2078,7 @@ function renderQuestion() {
       : dpanel('✏️', 'طلبك اتنفّذ أو اتلغى قبل ما تحفظ تعديلاتك عليه', 'تقدر تحوّل التعديلات لطلب جديد، أو تحذفها.', `<button class="btn ok" data-draft-convert="edit_request">✓ حوّلها لطلب جديد</button><button class="btn warn" data-draft-drop="edit_request">✕ احذفها</button>`)) : '',
     dQe ? dpanel('⚡', 'عندك تعديل سريع لم يُحفظ', `محفوظ تلقائيًا (آخر حفظ: ${esc(draftAge(dQe))}).`, `<button class="btn ok" data-draft-open="quick_edit">✓ أكمل وأكّد التعديل</button><button class="btn warn" data-draft-drop="quick_edit">✕ إلغاء التعديل</button>`) : '',
   ].join('');
-  const folderLabel = FOLDERS.find(f => f.id === nav.folder)?.label || '';
+  const folderLabel = (FOLDERS.find(f => f.id === nav.folder)?.label || '') + (nav.folder === S.view.folder && partOf(S.view) ? ' – ' + partOf(S.view)[1] : '');   // 6.4: with the chosen kind
 
   const facts = [
     years ? `<span>ورد في: <b>${esc(years)}</b></span>` : '',

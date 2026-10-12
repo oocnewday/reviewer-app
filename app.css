@@ -806,6 +806,7 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .ftile[data-on="true"] .ft-s{color:inherit;opacity:.92}
 /* 6.1: "📋 الباقي" (chapter card and summary): a folder is a blue outlined button, the questions that have not reached the review a grey label */
 .ftile .ft-s .nw{white-space:nowrap}
+.ftile .ft-s .nw.wr{display:block;white-space:normal}   /* 6.4: the kinds of «لم تُعتمد» and «لم تتأكد مواضيعها», one per line */
 .sc-left{margin-top:10px;padding:8px 10px 10px;border-radius:10px;background:var(--paper)}
 .sc-left .left-h{margin:0 0 6px;font-weight:700;font-size:.92rem}
 .lps{display:flex;flex-wrap:wrap;gap:6px}
