@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.4';
-const APP_BUILD = '12/10/2026';
+const APP_VERSION = '6.5';
+const APP_BUILD = '14/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -2905,18 +2905,32 @@ function openChapterSummary() {
 function staffCard() {
   const p = S.pipeline; if (!S.isAdmin || !p) return '';
   const st = p.by_status || {};
-  const act = (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
+  const chs = S.chapters && S.chapters.length ? S.chapters : null;
   const openState = localStorage.getItem('staffOpen') === '1';
   S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
-  const body = S.chapters && S.chapters.length ? chapterCardsHTML(S.chapters) : legacyRows(p);
+  S.adminLeft = {};   // filled by each card (6.5)
+  const body = chs ? chapterCardsHTML(chs) : legacyRows(p);
+  // 6.5 (owner 14/10): the count in the title is added up from the cards' own steps, so it says what the cards say: a question
+  // waiting for a rebuild is the reviewers' work (the card shows it under "مستنية إعادة تركيب"), while page images, an extraction
+  // and the classification are the admin's. No cards: the bank count, as before.
+  const act = chs ? Object.values(S.adminLeft).reduce((x, v) => x + v, 0)
+    : (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
     <span class="small muted" style="margin-inline-start:8px">${act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
     ${newBtn}${body}
     <details class="solver-d" id="solver-d" ${localStorage.getItem('solverOpen') === '1' ? 'open' : ''}><summary>🤖 المحلّل الآلي (مدفوع): <span id="solver-sum" class="small muted">جاري التحميل…</span></summary>
       <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div></details>
-    <div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>
+    ${bankLine(chs) || `<div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>`}
   </details>`;
+}
+// 6.5 (owner 14/10): the line under the cards = the whole bank, added up from the cards, in the same parts as each card's "منهم" line
+// (before, "في المراجعة" here was the bank's in_review alone, while a card's adds the revised ones). No cards or an older server: the old line.
+function bankLine(chs) {
+  if (!chs || chs.some(c => c.unsolved === undefined)) return '';
+  const sum = {};
+  for (const k of ['total', 'unsolved', 'awaiting_reason', 'in_review', 'revised', 'needs_revision', 'awaiting_rebuild', 'approved']) sum[k] = chs.reduce((x, c) => x + (Number(c[k]) || 0), 0);
+  return distHTML(sum, 'البنك كله:');
 }
 const OPEN_CLAUDE = '<a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">افتح Claude</a>';
 // 4.8 rows, kept as the fallback while chapter_runs_status is unavailable (before migration 039, or on a failed call).
@@ -2939,14 +2953,17 @@ function legacyRows(p) {
 // 5.8 (owner 8/10): "finished" also needs every question's topics confirmed (and none waiting in "مواضيع تتراجع")
 const chapOpen = () => { try { return JSON.parse(localStorage.getItem('chapOpen') || '[]'); } catch { return []; } };
 const topicLeft = c => { const n = k => Number(c[k]) || 0; return c.topics_confirmed === undefined ? 0 : Math.max(0, n('total') - n('topics_confirmed')) + n('topics_pending_change'); };
-// edited after their topics were confirmed, in this file's chapters (the list has no file per question; one file per chapter so far)
+// edited after their topics were confirmed, in this file. 6.5 (migration 064): the bank counts them per file; an older server
+// has no such key, and then the count falls back to the chapter names (a chapter split over two files counts in both cards)
 function chapRecheck(c) {
+  if (c.topics_recheck !== undefined) return Number(c.topics_recheck) || 0;
   if (!S.topicR || !S.topicR.size) return 0;
   const names = new Set((c.chapters || []).map(x => x.name));
   return S.rows.filter(r => S.topicR.has(r.qid) && names.has(r.chapter)).length;
 }
 // 6.1 (owner 11/10): topics finished = confirmed with nothing waiting (no extra suggestion, no check after an edit), as in "مواضيعها متأكدة ✅"
 function chapRecheckOnly(c) {
+  if (c.topics_recheck_only !== undefined) return Number(c.topics_recheck_only) || 0;   // 6.5 (064)
   if (!S.topicR || !S.topicR.size) return 0;
   const names = new Set((c.chapters || []).map(x => x.name));
   return S.rows.filter(r => S.topicR.has(r.qid) && names.has(r.chapter) && !(S.topicS && S.topicS.has(r.qid))).length;
@@ -2960,6 +2977,19 @@ function chapterCardsHTML(list) {
   const done = sorted.filter(chapDone);
   const active = sorted.filter(c => !done.includes(c));
   return active.map(chapterCard).join('') + (done.length ? `<details class="chap-done"><summary>✅ شباتر خلصت (${done.length})</summary>${done.map(chapterCard).join('')}</details>` : '');
+}
+// 6.3 (owner 12/10): where every question of the file is now, for information only (no buttons), straight from the bank, so the numbers
+// add up to the total at a glance ("حل 213" next to 231 extracted); the reviewers' share is marked as theirs. Missing fields (an older
+// server): no line. Anything outside these states shows as "حالة تانية", so the sum always equals the total.
+// 6.5: a function, so the line under the cards ("البنك كله", the sum of the cards) has the same parts as each card
+function distHTML(c, head = 'منهم:') {
+  const n = k => Number(c[k]) || 0;
+  if (!(n('total') > 0) || ['unsolved', 'in_review', 'approved'].some(k => c[k] === undefined)) return '';
+  const parts = [[n('unsolved') + n('awaiting_reason'), 'مستنية الحل'], [n('in_review') + n('revised') + n('needs_revision'), 'في المراجعة'],
+    [n('awaiting_rebuild'), 'مستنية إعادة تركيب (عند المراجعين)']];
+  const other = n('total') - parts.reduce((x, [v]) => x + v, 0) - n('approved');
+  const items = [...parts.filter(([v]) => v > 0), [n('approved'), 'معتمدة'], ...(other > 0 ? [[other, 'حالة تانية']] : [])];
+  return `<div class="chap-dist small"><span class="dist-h">${head}</span>${items.map(([v, l]) => `<span class="dp"><b>${v}</b> ${l}</span>`).join('')}<span class="dist-t">= ${n('total')} سؤال</span></div>`;   // grey labels, no buttons
 }
 function chapterCard(c) {
   const n = k => Number(c[k]) || 0;
@@ -3000,6 +3030,9 @@ function chapterCard(c) {
   ];
   const fin = chapDone(c);
   const rec = (steps.find(s => s.work) || {}).id;
+  // 6.5: what this card asks of the admin, for the count in the panel title: page images or an extraction count as 1 (a step of the
+  // chapter), the other steps by their questions (to solve, with no topic yet, requests and checks)
+  if (S.adminLeft) S.adminLeft[Number(c.run_id)] = steps.filter(s => s.work).reduce((x, s) => x + (s.id === 'pages' || typeof s.left !== 'number' ? 1 : s.left), 0);
   const file = b ? [   // 5.9: the missing page images are step 1 now, with their button
     c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
     n('total') === 0 ? `<button class="linkbtn danger" type="button" data-delrun="${Number(c.run_id)}">🗑️ مسح الشابتر</button>` : '',
@@ -3018,23 +3051,16 @@ function chapterCard(c) {
   const sumLine = fin ? '<span class="tag ok">✅ اكتمل</span> <span class="muted">مفيش باقي</span>'
     : leftItems.length ? `<span class="left-h">📋 الباقي:</span> ${leftItems.join('<span class="sep"> · </span>')}` : recStep ? `<span class="tag cobalt now">دلوقتي: ${recStep.name}</span>`
     : tot ? '<span class="tag">⏳ مستني المراجعين</span> <span class="muted">مفيش مطلوب من الإدارة دلوقتي</span>' : '';   // 6.1: only reviewer work is left (their side)
-  // 6.3 (owner 12/10): where every question of the file is now, for information only (no buttons), straight from the bank, so the numbers
-  // add up to the total at a glance ("حل 213" next to 231 extracted); the reviewers' share is marked as theirs. Missing fields (an older
-  // server): no line. Anything outside these states shows as "حالة تانية", so the sum always equals the total.
-  const dist = (() => {
-    if (!tot || ['unsolved', 'in_review', 'approved'].some(k => c[k] === undefined)) return '';
-    const parts = [[n('unsolved') + n('awaiting_reason'), 'مستنية الحل'], [n('in_review') + n('revised') + n('needs_revision'), 'في المراجعة'],
-      [n('awaiting_rebuild'), 'مستنية إعادة تركيب (عند المراجعين)']];
-    const other = n('total') - parts.reduce((x, [v]) => x + v, 0) - n('approved');
-    const items = [...parts.filter(([v]) => v > 0), [n('approved'), 'معتمدة'], ...(other > 0 ? [[other, 'حالة تانية']] : [])];
-    return `<div class="chap-dist small"><span class="dist-h">منهم:</span>${items.map(([v, l]) => `<span class="dp"><b>${v}</b> ${l}</span>`).join('')}<span class="dist-t">= ${n('total')} سؤال</span></div>`;   // grey labels, no buttons
-  })();
+  const dist = distHTML(c);   // 6.3, a function since 6.5 (the bank line under the cards uses it too)
+  // 6.5 (owner 14/10): a chapter with questions in another file too: this card counts this file only, the reviewer panel the whole chapter
+  const shared = (c.chapters || []).some(x => (S.chapters || []).some(o => Number(o.run_id) !== Number(c.run_id) && (o.chapters || []).some(y => Number(y.id) === Number(x.id))));
+  const fileNote = tot && shared ? '<div class="chap-note small muted">ℹ️ الأرقام دي للملف ده بس. لوحة المراجع بتعدّ الشابتر من كل الملفات.</div>' : '';
   const bars = tot ? `<div class="chap-bars">${progBar('الاعتماد', n('approved'), n('total'), 'a')}${c.topics_confirmed === undefined ? '' : progBar('المواضيع', topicDone(c), n('total'), 't')}</div>` : '';
   const isOpen = chapOpen().includes(Number(c.run_id));
   const tagOf = (s, st) => st === 'now' ? ' <span class="tag cobalt">دلوقتي</span>' : st === 'next' ? ' <span class="tag">بعدها</span>' : st === 'wait' && s.wait ? ` <span class="tag">${s.wait}</span>` : '';
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
     <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>
-      ${trk}<div class="chap-sum small">${sumLine}</div>${bars}${dist}</summary>
+      ${trk}<div class="chap-sum small">${sumLine}</div>${bars}${dist}${fileNote}</summary>
     ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
     <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>

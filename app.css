@@ -823,3 +823,6 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .staff .chap-dist .dp{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;background:var(--line-2);white-space:nowrap}
 .staff .chap-dist .dp b{color:var(--ink);font-variant-numeric:tabular-nums}
 .staff .chap-dist .dist-t{white-space:nowrap;font-weight:700;color:var(--ink)}
+/* 6.5: a card whose chapter has questions in another file too; the bank line under the cards */
+.staff .chap-note{margin:6px 0 0;line-height:1.5}
+.staff > .chap-dist{margin:10px 0 4px}
