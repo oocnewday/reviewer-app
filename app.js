@@ -14,7 +14,7 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.5';
+const APP_VERSION = '6.7';
 const APP_BUILD = '14/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -452,6 +452,9 @@ const INFO = {
   topicre: { what: 'أسئلة مواضيعها اتأكدت، وبعدين السؤال نفسه اتعدّل.', todo: 'افتح السؤال، واضغط «✓ لسه مناسبة» أو «تغيير».' },
   action: { name: '📋 المطلوب منك', what: 'كل الحاجات اللي مستنية منك إجراء، في كل الشباتر، في مكان واحد وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يفتحلك أسئلته على طول.',
     tip: 'السؤال الواحد ممكن يبقى في أكتر من سطر، زي سؤال في المراجعة وعليه موضوع مقترح (اعتماده بيأكد موضوعه لوحده)، والرقم الكبير بيعدّه مرة واحدة.' },
+  // 6.6 (owner 14/10): the admin panel's own "المطلوب" button
+  adminact: { name: '📋 المطلوب من الإدارة', what: 'كل الخطوات اللي مستنية الإدارة في كل الشباتر، في مكان واحد، وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يوديك للخطوة في كارت الشابتر، وهناك زرار نسخ الرسالة.',
+    tip: 'الرقم هو نفس رقم «يحتاج إجراء» اللي فوق اللوحة: صور الصفحات والاستخراج بيتحسبوا واحد لكل شابتر، والحل والتصنيف والتعديلات بعدد أسئلتهم. والأسئلة اللي في المراجعة أو مستنية إعادة تركيب أو تأكيد مواضيع مش هنا، لأنها شغل المراجعين.' },
   scope: { name: '📚 الشابتر', what: 'اختار شابتر، وكل الأرقام والقوايم اللي تحت بتمشي عليه. و«الكل» يعني كل الشباتر.', free: 'الشريطين بيقولولك الشابتر خلص قد إيه: الاعتماد، والمواضيع. وسطر «📋 الباقي» بيقول اللي فاضل، وكل حاجة فيه بتفتح أسئلتها. ولما يخلص اللي وصلك، بيقولك لو فيه أسئلة لسه بتتجهز (دي شغل الإدارة، وبتوصلك لوحدها).' },
   hidden: { name: '🙈 المخفي عن الطلاب', what: 'أسئلة مش ظاهرة للطلاب دلوقتي. لما تضغطه، أسباب الإخفاء بتنوّر تحته بأرقامها:',
     list: ['ثقة منخفضة', 'مختلف مع المصدر', 'ناقص في المصدر', '<b>المراجع طلب تغيير الإجابة:</b> الإجابة عليها طلب تغيير مفتوح، أو اتغيرت ولسه التغيير ماتعتمدش. السؤال بيرجع للطلاب أول ما يتعتمد.'],
@@ -983,6 +986,8 @@ function renderQueue() {
   // 6.0: the admin panel's buttons open a folder on every chapter with no filter (a part of "مستنية تأكيدك" when named), so the list matches its count
   $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => goFolder(b.dataset.gofolder, { parts: b.dataset.parts ? b.dataset.parts.split(',') : undefined }));
   const cs = document.getElementById('chsum'); if (cs) cs.onclick = openChapterSummary;
+  const aa = document.getElementById('atodo-open'); if (aa) aa.onclick = openAdminActions;   // 6.6
+  const sa = document.getElementById('staff-act'); if (sa) sa.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); openAdminActions(); };   // the count in the title: the list, not open/close
   bindInstall();
   const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
   if (S.isAdmin && S.pipeline) loadSolver();
@@ -2908,7 +2913,7 @@ function staffCard() {
   const chs = S.chapters && S.chapters.length ? S.chapters : null;
   const openState = localStorage.getItem('staffOpen') === '1';
   S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
-  S.adminLeft = {};   // filled by each card (6.5)
+  S.adminLeft = {}; S.adminActs = [];   // filled by each card (6.5, 6.6)
   const body = chs ? chapterCardsHTML(chs) : legacyRows(p);
   // 6.5 (owner 14/10): the count in the title is added up from the cards' own steps, so it says what the cards say: a question
   // waiting for a rebuild is the reviewers' work (the card shows it under "مستنية إعادة تركيب"), while page images, an extraction
@@ -2917,8 +2922,8 @@ function staffCard() {
     : (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
-    <span class="small muted" style="margin-inline-start:8px">${act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
-    ${newBtn}${body}
+    <span class="small muted" style="margin-inline-start:8px">${act && chs ? `<button class="staff-act" type="button" id="staff-act">${act} يحتاج إجراء</button>` : act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
+    ${chs ? adminTodoButton(act) : ''}${newBtn}${body}
     <details class="solver-d" id="solver-d" ${localStorage.getItem('solverOpen') === '1' ? 'open' : ''}><summary>🤖 المحلّل الآلي (مدفوع): <span id="solver-sum" class="small muted">جاري التحميل…</span></summary>
       <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div></details>
     ${bankLine(chs) || `<div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>`}
@@ -2931,6 +2936,33 @@ function bankLine(chs) {
   const sum = {};
   for (const k of ['total', 'unsolved', 'awaiting_reason', 'in_review', 'revised', 'needs_revision', 'awaiting_rebuild', 'approved']) sum[k] = chs.reduce((x, c) => x + (Number(c[k]) || 0), 0);
   return distHTML(sum, 'البنك كله:');
+}
+/* 6.6 (owner 14/10): "📋 المطلوب من الإدارة", as "المطلوب منك" on the reviewers' side: every admin step with work in the cards
+   (the same steps the title counts), one row each, and a row takes him to that step in its card, where its copy button is. */
+function adminTodoButton(act) {
+  return `<div class="todo-row a-todo"><button class="todo-btn${act ? '' : ' none'}" type="button" id="atodo-open"><span class="ic" aria-hidden="true">${act ? '📋' : '✅'}</span><span class="grow"><b>المطلوب من الإدارة</b><span class="sub">${act ? 'اضغط تشوف كل اللي محتاج منك إجراء وفين' : 'مفيش حاجة مطلوبة من الإدارة دلوقتي بفضل الله'}</span></span>${act ? `<span class="big-n" aria-label="${act}">${act}</span>` : ''}</button>${infoBtn('adminact', 'المطلوب من الإدارة')}</div>`;
+}
+const A_IC = { pages: '🖼️', extract: '📄', solve: '🧠', topics: '🏷️', revise: '✏️' };
+const A_DO = { pages: 'كمّل صور الصفحات من الكارت.', extract: 'انسخ رسالة الاستخراج وافتح بيها محادثة جديدة.', solve: 'انسخ رسالة الحل وافتح بيها محادثة جديدة.',
+  topics: 'انسخ رسالة التصنيف وافتح بيها محادثة جديدة.', revise: 'انسخ رسالة التعديلات وافتح بيها محادثة جديدة.' };
+function openAdminActions() {
+  const acts = S.adminActs || [];
+  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📋 المطلوب من الإدارة</h2><p class="hint" style="margin-top:4px">في كل الشباتر. اضغط أي سطر يوديك للخطوة في كارت الشابتر، وهناك زرار الرسالة.</p></div>
+    ${acts.length ? acts.map(a => `<button class="act" type="button" data-arun="${a.run}" data-astep="${a.step}"><span class="ic" aria-hidden="true">${A_IC[a.step] || '📋'}</span><span class="grow"><b>${esc(a.name)}</b><span class="s ch"><bdi dir="ltr">${esc(a.chapter)}</bdi></span>${a.file ? `<span class="s">📄 <bdi dir="ltr">${esc(a.file)}</bdi></span>` : ''}<span class="s">${esc(a.detail)}. ${A_DO[a.step] || ''}</span></span>${a.n ? `<span class="n">${a.n}</span>` : ''}<span class="go">روح ←</span></button>`).join('')
+      : '<div class="ex-blk free">✅ مفيش حاجة مطلوبة من الإدارة دلوقتي بفضل الله. والباقي شغل المراجعين.</div>'}
+    <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
+  sheet.querySelector('[data-close]').onclick = () => close();
+  sheet.querySelectorAll('[data-arun]').forEach(b => b.onclick = () => { close(); setTimeout(() => goStep(Number(b.dataset.arun), b.dataset.astep), 220); });
+}
+// open the panel, the card (and "✅ شباتر خلصت" if it sits there), and bring the step into view with a short glow
+function goStep(run, step) {
+  const st = document.getElementById('staff'); if (st && !st.open) st.open = true;
+  const d = document.querySelector(`details.chap[data-run="${run}"]`); if (!d) return;
+  const grp = d.closest('details.chap-done'); if (grp) grp.open = true;
+  d.open = true;
+  const el = d.querySelector(`.chstep[data-step="${step}"]`) || d;
+  el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2600);
 }
 const OPEN_CLAUDE = '<a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">افتح Claude</a>';
 // 4.8 rows, kept as the fallback while chapter_runs_status is unavailable (before migration 039, or on a failed call).
@@ -2991,6 +3023,9 @@ function distHTML(c, head = 'منهم:') {
   const items = [...parts.filter(([v]) => v > 0), [n('approved'), 'معتمدة'], ...(other > 0 ? [[other, 'حالة تانية']] : [])];
   return `<div class="chap-dist small"><span class="dist-h">${head}</span>${items.map(([v, l]) => `<span class="dp"><b>${v}</b> ${l}</span>`).join('')}<span class="dist-t">= ${n('total')} سؤال</span></div>`;   // grey labels, no buttons
 }
+// 6.7 (owner 14/10): a second file can be added to a chapter that has one already, so two cards may carry the same chapter title;
+// then the file name shows under the title (its own line, as it is English) and on the rows of "المطلوب من الإدارة"
+const sameTitle = c => { const t = String(c.chapter || '').trim().toLowerCase(); return (S.chapters || []).filter(o => String(o.chapter || '').trim().toLowerCase() === t).length > 1; };
 function chapterCard(c) {
   const n = k => Number(c[k]) || 0;
   const b = c.batch_id, key = `r${Number(c.run_id)}`;
@@ -3010,16 +3045,19 @@ function chapterCard(c) {
       text: solveN ? `${n('unsolved')} ينتظر الحل${n('unsolved') ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'})` : ''}${n('awaiting_reason') ? `، و${n('awaiting_reason')} ينتظر سبب الاختلاف` : ''}` : 'مفيش أسئلة تنتظر الحل',
       btn: solveN ? `<button class="btn primary" data-copy="${b ? `s${key}` : 'solve'}">انسخ رسالة الحل</button>${OPEN_CLAUDE}` : '' },
     ...(c.topics_confirmed === undefined ? [] : [(() => {
-      const none = Math.max(0, n('total') - n('topics_confirmed') - n('topics_suggested'));
+      const noneAll = Math.max(0, n('total') - n('topics_confirmed') - n('topics_suggested'));
+      // 6.7 (owner 14/10, migration 065): only solved questions are classified; one not solved yet (or waiting for a rebuild) waits for a
+      // later run, so it is not asked of the admin now. An older server has no such count: all of them, as before.
+      const none = c.topics_none_ready === undefined ? noneAll : Math.min(noneAll, n('topics_none_ready')), later = noneAll - none;
       const sug = n('topics_suggested'), pc = n('topics_pending_change'), re = chapRecheck(c);
       S.copyMsgs[`t${key}`] = msgTopics(c);
       const chs = (c.chapters || []).map(x => `<a class="btn sec small" href="#topics/${Number(x.id)}" title="${esc(x.name)} (${Number(x.n)})">🏷️ ${esc(x.name)} (${Number(x.n)})</a>`).join('');
       // 6.1 (owner 11/10): the admin panel holds the preparation only: here the classification (questions with no topic yet);
       // confirming the suggested topics is the reviewers' work (their side), so it is shown as a count with no button
       const work = n('total') > 0 && solveN === 0 && none > 0, left = n('total') ? none : 0;
-      return { id: 'topics', name: 'تصنيف المواضيع', work, left, ok: none === 0,
+      return { id: 'topics', name: 'تصنيف المواضيع', work, left, ok: none === 0 && (c.topics_none_ready === undefined || solveN === 0),
         wait: !work && left && solveN ? 'بعد الحل' : '',
-        text: n('total') ? [`${topicDone(c)} متأكد ومفيش عليه حاجة من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '',
+        text: n('total') ? [`${topicDone(c)} متأكد ومفيش عليه حاجة من ${n('total')}`, sug ? `${sug} مستني تأكيد` : '', none ? `${none} مالهاش موضوع` : '', later ? `${later} هيتصنفوا بعد ما يتحلّوا` : '',
           pc ? `${pc} متأكد وعليه اقتراح زيادة` : '', re ? `${re} محتاجة تتراجع بعد تعديل السؤال` : ''].filter(Boolean).join(' · ') : 'بعد الاستخراج والحل',
         btn: n('total') ? `<button class="btn${none ? ' primary' : ' sec'}" data-copy="t${key}">انسخ رسالة التصنيف</button>${chs}` : '' };
     })()]),
@@ -3033,6 +3071,9 @@ function chapterCard(c) {
   // 6.5: what this card asks of the admin, for the count in the panel title: page images or an extraction count as 1 (a step of the
   // chapter), the other steps by their questions (to solve, with no topic yet, requests and checks)
   if (S.adminLeft) S.adminLeft[Number(c.run_id)] = steps.filter(s => s.work).reduce((x, s) => x + (s.id === 'pages' || typeof s.left !== 'number' ? 1 : s.left), 0);
+  // 6.6: the same steps, one row each, for "📋 المطلوب من الإدارة" (n = questions; page images and an extraction show no number, as they count 1)
+  if (S.adminActs) steps.filter(s => s.work).forEach(s => S.adminActs.push({ run: Number(c.run_id), chapter: c.chapter || '', file: sameTitle(c) ? c.file_name || '' : '', step: s.id, name: s.name,
+    n: s.id === 'pages' || typeof s.left !== 'number' ? 0 : s.left, detail: s.id === 'topics' ? `${s.left} سؤال مالهمش موضوع لسه` : s.text }));
   const file = b ? [   // 5.9: the missing page images are step 1 now, with their button
     c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
     n('total') === 0 ? `<button class="linkbtn danger" type="button" data-delrun="${Number(c.run_id)}">🗑️ مسح الشابتر</button>` : '',
@@ -3059,13 +3100,13 @@ function chapterCard(c) {
   const isOpen = chapOpen().includes(Number(c.run_id));
   const tagOf = (s, st) => st === 'now' ? ' <span class="tag cobalt">دلوقتي</span>' : st === 'next' ? ' <span class="tag">بعدها</span>' : st === 'wait' && s.wait ? ` <span class="tag">${s.wait}</span>` : '';
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
-    <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>
+    <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>${sameTitle(c) && c.file_name ? `<div class="chap-file small muted">📄 <bdi dir="ltr">${esc(c.file_name)}</bdi></div>` : ''}
       ${trk}<div class="chap-sum small">${sumLine}</div>${bars}${dist}${fileNote}</summary>
     ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
     <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
     ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}
-    <ol class="chsteps">${steps.map((s, i) => { const st = stOf(s); return `<li class="chstep ${st}${s.id === rec ? ' rec' : ''}${s.work ? ' work' : ' idle'}${st === 'ok' ? ' ok' : ''}"><span class="st-ic" aria-hidden="true">${st === 'ok' ? '✓' : i + 1}</span><div class="grow"><div class="st-t"><b>${s.name}</b> <span class="small muted">${s.text}</span>${tagOf(s, st)}</div>${s.btn ? `<div class="st-btns">${st === 'now' ? s.btn : s.btn.replace(/\bbtn primary\b/g, 'btn sec')}</div>` : ''}</div></li>`; }).join('')}</ol>
+    <ol class="chsteps">${steps.map((s, i) => { const st = stOf(s); return `<li data-step="${s.id}" class="chstep ${st}${s.id === rec ? ' rec' : ''}${s.work ? ' work' : ' idle'}${st === 'ok' ? ' ok' : ''}"><span class="st-ic" aria-hidden="true">${st === 'ok' ? '✓' : i + 1}</span><div class="grow"><div class="st-t"><b>${s.name}</b> <span class="small muted">${s.text}</span>${tagOf(s, st)}</div>${s.btn ? `<div class="st-btns">${st === 'now' ? s.btn : s.btn.replace(/\bbtn primary\b/g, 'btn sec')}</div>` : ''}</div></li>`; }).join('')}</ol>
   </details>`;
 }
 /* ---------- v4.8 (item 92 phase 2): ➕ new chapter ----------

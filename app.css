@@ -826,3 +826,11 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 /* 6.5: a card whose chapter has questions in another file too; the bank line under the cards */
 .staff .chap-note{margin:6px 0 0;line-height:1.5}
 .staff > .chap-dist{margin:10px 0 4px}
+/* 6.6: "📋 المطلوب من الإدارة": the count in the panel title opens the list; a step reached from the list glows for a moment */
+.staff-act{font:inherit;color:var(--cobalt);background:none;border:0;padding:6px 2px;min-height:32px;cursor:pointer;text-decoration:underline;text-underline-offset:3px;font-weight:600}
+.staff .a-todo{margin:12px 0 4px}
+.act .s.ch{font-weight:600;color:var(--ink)}
+.staff .chstep.flash{animation:stepglow 2.4s ease-out}
+@keyframes stepglow{0%,45%{box-shadow:0 0 0 3px var(--cobalt)}100%{box-shadow:0 0 0 0 transparent}}
+/* 6.7: the file name under a chapter title that two cards share */
+.staff .chap-file{margin-top:2px;overflow-wrap:anywhere}
