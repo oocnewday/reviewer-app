@@ -14,7 +14,7 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.8';
+const APP_VERSION = '6.9';
 const APP_BUILD = '15/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -137,10 +137,10 @@ async function rpc(fn, args) {
   if (error) { if (/NOT_IN_REVIEW/.test(error.message || '')) staleQuestion(); throw error; }
   return data;
 }
-async function copyText(text) {
+async function copyText(text, hint) {
   try { await navigator.clipboard.writeText(text); }
   catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-  notify('تم نسخ الرسالة بفضل الله', 'الصقها في محادثة Claude جديدة.');
+  notify('تم نسخ الرسالة بفضل الله', hint || 'الصقها في محادثة Claude جديدة.', 'ok', hint ? 8000 : 4200);   // 6.9: a longer hint stays longer
 }
 const seenKey = (n, kind) => `notice:${S.session?.user?.id}:${n.id}:${kind}`;
 const seen = (n, kind) => { try { return localStorage.getItem(seenKey(n, kind)) === '1'; } catch { return false; } };
@@ -757,15 +757,21 @@ async function loadQueue() {
   rpc('team_activity_new_count', { p_since: since }).then(n => { S.newCount = n || 0; const bd = document.getElementById('feed-n'); if (bd) { bd.textContent = S.newCount; bd.classList.toggle('hidden', !S.newCount); } }).catch(() => { });
   const rb = rpc('rebuild_queue').catch(() => []);   // empty for anyone below access 3
   const tasks = [rpc('reviewer_questions'), rpc('reviewer_notices'), Drafts.pull(), loadStudentUrl()];
+  let orp = null;
   if (S.isAdmin) {
     tasks.push(rpc('pipeline_status').catch(() => null));
     // v4.8: chapter cards (migration 039). Missing function or no network: the panel falls back to the two 4.7-style rows.
     tasks.push(rpc('chapter_runs_status').catch(e => { console.warn('chapter_runs_status:', e && e.message); return null; }));
+    // 6.9 (migration 066): page images or file copies left without a card (a deletion whose storage step never reached the server);
+    // missing function or no network: no line
+    S.bankChapters = null;   // 6.9: the chapter names are read again when a card sheet opens next
+    orp = rpc('storage_orphans').catch(e => { console.warn('storage_orphans:', e && e.message); return null; });
   }
   const ts = rpc('topic_states').catch(e => { console.warn('topic_states:', e && e.message); return null; });   // 5.3 (migration 048)
   const bl = rpc('reviewer_backlog').catch(e => { console.warn('reviewer_backlog:', e && e.message); return null; });   // 6.1 (migration 063); missing: the old wording
   const [q, n, , , p, ch] = await Promise.all(tasks);
   const blv = await bl; S.backlog = Array.isArray(blv) ? blv : null;
+  const ov = await orp; S.orphans = Array.isArray(ov) ? ov : null;
   const tsv = await ts; S.topicC = tsv ? new Set(tsv.c || []) : null; S.topicS = tsv ? new Set(tsv.s || []) : null;
   S.topicR = tsv && tsv.r ? new Set(tsv.r) : null;   // 5.7 (migration 062): edited after the topics were confirmed
   S.rows = q || []; S.notices = n || []; S.pipeline = p || null; S.chapters = Array.isArray(ch) ? ch : null; S.rowsAt = Date.now(); S.dirty = false; S.prefetch = {};
@@ -973,7 +979,9 @@ function renderQueue() {
     if (!S.rows.some(x => x.qid === n)) notify(`السؤال رقم ${n} مش ضمن فولدراتك`, 'هحاول أفتحه لو عندك صلاحية عليه.', 'info');
     location.hash = `#q/${n}`;
   };
-  $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText((S.copyMsgs || {})[b.dataset.copy] || (b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE)));
+  $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText((S.copyMsgs || {})[b.dataset.copy] || (b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE), (S.copyHints || {})[b.dataset.copy]));
+  const oc = document.getElementById('orph-del'); if (oc) oc.onclick = () => cleanOrphans();   // 6.9
+  $app.querySelectorAll('[data-editrun]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.editrun)); if (c) openChapterEdit(c); });   // 6.9
   const ncb = document.getElementById('nc-open'); if (ncb) ncb.onclick = () => openNewChapter();
   $app.querySelectorAll('details.chap').forEach(d => d.addEventListener('toggle', () => {
     const id = Number(d.dataset.run), set = new Set(chapOpen());
@@ -1334,7 +1342,7 @@ async function deleteChapter(c) {
       if (paths.length) { const { error } = await sb.storage.from(r.pages_bucket).remove(paths); if (error) left += paths.length; }
       if (r.had_copy) { const { error } = await sb.storage.from(r.file_bucket).remove([r.file_path]); if (error) left++; }
     } catch (e) { console.warn('chapter files:', e); left++; }
-    notify(`اتمسح شابتر ${c.chapter}`, left ? 'بس فيه ملفات ماتمسحتش من المخزن؛ ممكن تتمسح من لوحة Supabase.' : '', left ? 'info' : undefined);
+    notify(`اتمسح شابتر ${c.chapter}`, left ? 'بس فيه ملفات ماتمسحتش من المخزن. بعد نص ساعة هتظهرلك في لوحة الإدارة في سطر «🧹» وتمسحها من هناك.' : '', left ? 'info' : undefined);
     await loadQueue(); renderQueue();
   } catch (e) { console.warn('chapter_delete:', e); notify('ماتمسحش', errText(e), 'info'); }
 }
@@ -2918,7 +2926,7 @@ function staffCard() {
   const chs = S.chapters && S.chapters.length ? S.chapters : null;
   const openState = localStorage.getItem('staffOpen') === '1';
   S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
-  S.adminLeft = {}; S.adminActs = [];   // filled by each card (6.5, 6.6)
+  S.adminLeft = {}; S.adminActs = []; S.copyHints = {};   // filled by each card (6.5, 6.6, 6.9)
   const body = chs ? chapterCardsHTML(chs) : legacyRows(p);
   // 6.5 (owner 14/10): the count in the title is added up from the cards' own steps, so it says what the cards say: a question
   // waiting for a rebuild is the reviewers' work (the card shows it under "مستنية إعادة تركيب"), while page images, an extraction
@@ -2928,7 +2936,7 @@ function staffCard() {
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
     <span class="small muted" style="margin-inline-start:8px">${act && chs ? `<button class="staff-act" type="button" id="staff-act">${act} يحتاج إجراء</button>` : act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
-    ${chs ? adminTodoButton(act) : ''}${newBtn}${body}
+    ${chs ? adminTodoButton(act) : ''}${orphanLine()}${newBtn}${body}
     <details class="solver-d" id="solver-d" ${localStorage.getItem('solverOpen') === '1' ? 'open' : ''}><summary>🤖 المحلّل الآلي (مدفوع): <span id="solver-sum" class="small muted">جاري التحميل…</span></summary>
       <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div></details>
     ${bankLine(chs) || `<div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>`}
@@ -2942,6 +2950,74 @@ function bankLine(chs) {
   for (const k of ['total', 'unsolved', 'awaiting_reason', 'in_review', 'revised', 'needs_revision', 'awaiting_rebuild', 'approved']) sum[k] = chs.reduce((x, c) => x + (Number(c[k]) || 0), 0);
   return distHTML(sum, 'البنك كله:');
 }
+/* 6.9 (owner 15/10, migration 066): page images (or a file copy) left in storage without a card, after a chapter deletion whose
+   storage step never reached the server. The bank lists them (storage_orphans: nothing a file or a card points to, nothing newer
+   than 30 minutes); the line shows only while there are some, and the button removes them through the Storage API. */
+function orphanLine() {
+  const o = (S.orphans || []).filter(x => Number(x.files) > 0); if (!o.length) return '';
+  const pages = o.filter(x => x.bucket === 'source-pages').reduce((a, x) => a + Number(x.files), 0), copies = o.filter(x => x.bucket !== 'source-pages').reduce((a, x) => a + Number(x.files), 0);
+  const what = [pages ? `${pages} ${pages >= 3 && pages <= 10 ? 'صور' : 'صورة'} صفحات` : '', copies ? `${copies === 1 ? 'نسخة ملف' : `${copies} نسخ ملفات`}` : ''].filter(Boolean).join(' و');
+  return `<div class="row orph"><div class="grow small">🧹 فيه ${what} اتسابت من غير كارت (من شابتر اتمسح). مش بتأثر على أي حاجة، بس بتاخد مساحة.</div><button class="btn sec" type="button" id="orph-del">امسحها</button></div>`;
+}
+const nFiles = n => `${n} ${n >= 3 && n <= 10 ? 'ملفات' : 'ملف'}`;
+async function cleanOrphans() {
+  const o = (S.orphans || []).filter(x => Number(x.files) > 0); if (!o.length) return;
+  const n = o.reduce((a, x) => a + Number(x.files), 0);
+  if (!confirm(`مسح ${nFiles(n)} اتسابوا من غير كارت؟\nمفيش أي كارت ولا سؤال بيستخدمهم، والمسح نهائي.`)) return;
+  const b = document.getElementById('orph-del'); if (b) { b.disabled = true; b.textContent = 'جاري المسح…'; }
+  let left = 0;
+  for (const x of o) {
+    try {
+      const { data: files, error: le } = await sb.storage.from(x.bucket).list(x.prefix, { limit: 1000 });
+      if (le || !(files || []).length) { console.warn('orphans list:', x.bucket, x.prefix, le && le.message); left += Number(x.files); continue; }   // nothing listed: say so, not "done"
+      const paths = (files || []).map(f => `${x.prefix}/${f.name}`);
+      for (let i = 0; i < paths.length; i += 100) {   // a few at a time, so a weak connection fails small
+        const { error } = await sb.storage.from(x.bucket).remove(paths.slice(i, i + 100)); if (error) left += paths.slice(i, i + 100).length;
+      }
+    } catch (e) { console.warn('orphans:', e); left += Number(x.files); }
+  }
+  notify(left ? 'المسح ماكملش' : 'اتمسحت بفضل الله', left ? `فاضل ${nFiles(left)}. السطر هيفضل ظاهر، وتقدر تضغط تاني.` : '', left ? 'info' : undefined);
+  await loadQueue(); renderQueue();
+}
+// 6.9: the chapter names of the bank (as in the students app), for "➕ شابتر جديد" and "✏️ عدّل بيانات الكارت"
+async function bankChapters() {
+  if (S.bankChapters) return S.bankChapters;
+  try { const { data, error } = await sb.from('taxonomy_items').select('name').eq('level_id', 1); if (!error && Array.isArray(data)) S.bankChapters = data.map(x => x.name).filter(Boolean).sort((a, b) => a.localeCompare(b)); }
+  catch (e) { console.warn('chapters:', e); }
+  return S.bankChapters || [];
+}
+const chOptions = names => `<datalist id="ch-names">${names.map(x => `<option value="${esc(x)}"></option>`).join('')}</datalist>`;
+const chKnown = (names, v) => names.some(x => x.toLowerCase() === String(v).trim().toLowerCase());
+const chCanon = (names, v) => names.find(x => x.toLowerCase() === String(v).trim().toLowerCase()) || String(v).trim();   // a bank name typed in another case: the bank's spelling
+const CH_WARN = v => `الاسم «${v}» مش من أسامي شباتر البنك (اللي في تطبيق الطلاب).\nده عنوان الكارت بس، والأسئلة شابترها بيتحدد في الاستخراج حسب محتواها.\nمتأكد إنك عايزه كده؟`;
+/* 6.9 (owner 15/10, migration 066): edit the card's three labels only (title, source, years). The file, its pages and the
+   questions stay as they are; the bank refuses anything else (chapter_update). */
+async function openChapterEdit(c) {
+  const names = await bankChapters();
+  const { sheet, close } = openSheet(`
+    <div class="sheet-head"><h2>✏️ بيانات الكارت</h2></div>
+    <p class="hint">بتغيّر هنا عنوان الكارت والمصدر والسنين بس. <b>تغيير اسم الشابتر مش بينقل الأسئلة لشابتر تاني</b>: شابتر كل سؤال بيتحدد في الاستخراج حسب محتواه، وده اللي بيظهر للطلاب. واسم الملف وصفحاته مابيتغيروش.</p>
+    <label class="f" for="ce-ch">الشابتر</label><input class="ci" id="ce-ch" dir="auto" maxlength="120" list="ch-names" value="${esc(c.chapter || '')}">${chOptions(names)}
+    <p class="hint">اختار من القايمة، بنفس الاسم اللي في تطبيق الطلاب.</p>
+    <label class="f" for="ce-src">المصدر</label><input class="ci" id="ce-src" dir="auto" maxlength="160" value="${esc(c.source || '')}">
+    <label class="f" for="ce-years">السنين <span class="lbl-sub">(اختياري)</span></label><input class="ci" id="ce-years" dir="auto" maxlength="60" value="${esc(c.years || '')}" placeholder="${esc(c.years_auto || 'مثال: 2010–2021')}">
+    <div class="err" id="ce-err" role="alert"></div>
+    <div class="foot"><button class="btn primary" id="ce-save">احفظ</button></div>`);
+  const $s = q => sheet.querySelector(q), err = t => { $s('#ce-err').textContent = t || ''; };
+  $s('#ce-save').onclick = async () => {
+    const ch = chCanon(names, $s('#ce-ch').value), src = $s('#ce-src').value.trim(), years = $s('#ce-years').value.trim();
+    if (!ch) return err('اكتب اسم الشابتر.');
+    if (!src) return err('اكتب المصدر.');
+    const before = [c.chapter || '', c.source || '', c.years || ''], after = [ch, src, years];
+    if (before.every((v, i) => v === after[i])) { close(true); return; }
+    if (names.length && !chKnown(names, ch) && ch !== (c.chapter || '') && !confirm(CH_WARN(ch))) return;
+    const diff = [['الشابتر', 0], ['المصدر', 1], ['السنين', 2]].filter(([, i]) => before[i] !== after[i]).map(([l, i]) => `${l}: «${before[i] || '—'}» ← «${after[i] || '—'}»`).join('\n');
+    if (!confirm(`حفظ التغيير ده؟\n${diff}`)) return;
+    const b = $s('#ce-save'); b.disabled = true;
+    try { await rpc('chapter_update', { p_run_id: c.run_id, p_chapter: ch, p_source: src, p_years: years || null }); close(true); notify('اتحفظت بيانات الكارت', ''); await loadQueue(); renderQueue(); }
+    catch (x) { console.warn('chapter edit:', x); b.disabled = false; err(errText(x)); }
+  };
+}
 /* 6.6 (owner 14/10): "📋 المطلوب من الإدارة", as "المطلوب منك" on the reviewers' side: every admin step with work in the cards
    (the same steps the title counts), one row each, and a row takes him to that step in its card, where its copy button is. */
 function adminTodoButton(act) {
@@ -2953,7 +3029,7 @@ const A_DO = { pages: 'كمّل صور الصفحات من الكارت.', extra
 function openAdminActions() {
   const acts = S.adminActs || [];
   const { sheet, close } = openSheet(`<div class="sheet-head"><h2>📋 المطلوب من الإدارة</h2><p class="hint" style="margin-top:4px">في كل الشباتر. اضغط أي سطر يوديك للخطوة في كارت الشابتر، وهناك زرار الرسالة.</p></div>
-    ${acts.length ? acts.map(a => `<button class="act" type="button" data-arun="${a.run}" data-astep="${a.step}"><span class="ic" aria-hidden="true">${A_IC[a.step] || '📋'}</span><span class="grow"><b>${esc(a.name)}</b><span class="s ch"><bdi dir="ltr">${esc(a.chapter)}</bdi></span>${a.file ? `<span class="s">📄 <bdi dir="ltr">${esc(a.file)}</bdi></span>` : ''}<span class="s">${esc(a.detail)}. ${A_DO[a.step] || ''}</span></span>${a.n ? `<span class="n">${a.n}</span>` : ''}<span class="go">روح ←</span></button>`).join('')
+    ${acts.length ? acts.map(a => `<button class="act" type="button" data-arun="${a.run}" data-astep="${a.step}"><span class="ic" aria-hidden="true">${A_IC[a.step] || '📋'}</span><span class="grow"><b>${esc(a.name)}</b><span class="s ch"><bdi dir="ltr">${esc(a.chapter)}</bdi></span>${a.file ? `<span class="s">📄 <bdi dir="ltr">${esc(a.file)}</bdi></span>` : ''}<span class="s">${esc(a.detail)}. ${esc(a.todo || A_DO[a.step] || '')}</span></span>${a.n ? `<span class="n">${a.n}</span>` : ''}<span class="go">روح ←</span></button>`).join('')
       : '<div class="ex-blk free">✅ مفيش حاجة مطلوبة من الإدارة دلوقتي بفضل الله. والباقي شغل المراجعين.</div>'}
     <div class="foot"><button class="btn" type="button" data-close>إغلاق</button></div>`);
   sheet.querySelector('[data-close]').onclick = () => close();
@@ -3035,7 +3111,10 @@ function chapterCard(c) {
   const n = k => Number(c[k]) || 0;
   const b = c.batch_id, key = `r${Number(c.run_id)}`;
   const solveN = n('unsolved') + n('awaiting_reason'), revN = n('open_requests') + n('consistency_checks');
-  if (b) { S.copyMsgs[`x${key}`] = msgExtract(b, c.file_name || ''); S.copyMsgs[`s${key}`] = msgSolveBatch(b); }
+  if (b) { S.copyMsgs[`x${key}`] = msgExtract(b, c.file_name || ''); S.copyMsgs[`s${key}`] = msgSolveBatch(b);
+    if (S.copyHints) S.copyHints[`x${key}`] = 'الصقها في محادثة Claude جديدة، وارفق ملف الشابتر في نفس الرسالة قبل ما تبعت.'; }   // 6.9 (owner 15/10)
+  // 6.9 (migration 066): an extraction is finished only when the chat marks the batch 'imported' at the end; until then the step stays open
+  const extRun = !!b && n('total') > 0 && c.batch_status !== undefined && c.batch_status !== null && c.batch_status !== 'imported';
   const chats = Math.ceil(n('unsolved') / 15);
   const pagesLeft = Math.max(0, n('page_count') - n('pages_done'));
   // 5.9: each step also says what is left in it (a count, or true for a step with no count); the summary lists them in order
@@ -3043,8 +3122,9 @@ function chapterCard(c) {
     ...(b || n('page_count') ? [{ id: 'pages', name: 'صور الصفحات', work: pagesLeft > 0, left: pagesLeft,
       text: !n('page_count') ? 'مفيش صور صفحات مسجّلة' : pagesLeft ? `${n('pages_done')} من ${n('page_count')} صفحة` : `${n('page_count')} صفحة جاهزة`,
       btn: pagesLeft && b ? `<button class="btn primary" type="button" data-pages="${Number(c.run_id)}">كمّل صور الصفحات</button>` : '' }] : []),
-    { id: 'extract', name: 'استخراج', work: !!b && n('total') === 0, left: !!b && n('total') === 0,
-      text: n('total') ? `${n('total')} سؤال` : 'لسه مفيش أسئلة',
+    { id: 'extract', name: 'استخراج', work: (!!b && n('total') === 0) || extRun, left: (!!b && n('total') === 0) || extRun,
+      text: extRun ? `${n('total')} سؤال لحد دلوقتي، والاستخراج لسه ماخلصش (لو محادثته وقفت في النص، كمّل بالرسالة دي في محادثة جديدة وارفق نفس الملف)` : n('total') ? `${n('total')} سؤال` : 'لسه مفيش أسئلة',
+      todo: extRun ? 'لو محادثة الاستخراج لسه شغالة سيبها تكمّل. ولو وقفت في النص، انسخ الرسالة وكمّل في محادثة جديدة وارفق نفس الملف.' : '',
       btn: b ? `<button class="btn${n('total') ? ' sec' : ' primary'}" data-copy="x${key}">انسخ رسالة الاستخراج</button>` : '' },
     { id: 'solve', name: 'حل', work: solveN > 0, left: solveN,
       text: solveN ? `${n('unsolved')} ينتظر الحل${n('unsolved') ? ` (حوالي ${chats} ${chats === 1 ? 'محادثة' : 'محادثات'})` : ''}${n('awaiting_reason') ? `، و${n('awaiting_reason')} ينتظر سبب الاختلاف` : ''}` : 'مفيش أسئلة تنتظر الحل',
@@ -3078,7 +3158,7 @@ function chapterCard(c) {
   if (S.adminLeft) S.adminLeft[Number(c.run_id)] = steps.filter(s => s.work).reduce((x, s) => x + (s.id === 'pages' || typeof s.left !== 'number' ? 1 : s.left), 0);
   // 6.6: the same steps, one row each, for "📋 المطلوب من الإدارة" (n = questions; page images and an extraction show no number, as they count 1)
   if (S.adminActs) steps.filter(s => s.work).forEach(s => S.adminActs.push({ run: Number(c.run_id), chapter: c.chapter || '', file: sameTitle(c) ? c.file_name || '' : '', step: s.id, name: s.name,
-    n: s.id === 'pages' || typeof s.left !== 'number' ? 0 : s.left, detail: s.id === 'topics' ? `${s.left} سؤال مالهمش موضوع لسه` : s.text }));
+    n: s.id === 'pages' || typeof s.left !== 'number' ? 0 : s.left, detail: s.id === 'topics' ? `${s.left} سؤال مالهمش موضوع لسه` : s.id === 'extract' && s.todo ? s.text.replace(/ \(.*\)$/, '') : s.text, todo: s.todo || '' }));
   const file = b ? [   // 5.9: the missing page images are step 1 now, with their button
     c.file_uploaded ? '<span class="tag">نسخة من الملف في التطبيق</span>' : '',
     n('total') === 0 ? `<button class="linkbtn danger" type="button" data-delrun="${Number(c.run_id)}">🗑️ مسح الشابتر</button>` : '',
@@ -3109,7 +3189,7 @@ function chapterCard(c) {
       ${trk}<div class="chap-sum small">${sumLine}</div>${bars}${dist}${fileNote}</summary>
     ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
-    <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button></div>
+    <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button><button class="linkbtn" type="button" data-editrun="${Number(c.run_id)}">✏️ عدّل بيانات الكارت</button></div>
     ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}
     <ol class="chsteps">${steps.map((s, i) => { const st = stOf(s); return `<li data-step="${s.id}" class="chstep ${st}${s.id === rec ? ' rec' : ''}${s.work ? ' work' : ' idle'}${st === 'ok' ? ' ok' : ''}"><span class="st-ic" aria-hidden="true">${st === 'ok' ? '✓' : i + 1}</span><div class="grow"><div class="st-t"><b>${s.name}</b> <span class="small muted">${s.text}</span>${tagOf(s, st)}</div>${s.btn ? `<div class="st-btns">${st === 'now' ? s.btn : s.btn.replace(/\bbtn primary\b/g, 'btn sec')}</div>` : ''}</div></li>`; }).join('')}</ol>
   </details>`;
@@ -3152,7 +3232,8 @@ function openNewChapter() {
     <label class="f" for="nc-file">ملف الشابتر (PDF)</label>
     <input type="file" id="nc-file" accept="application/pdf,.pdf">
     <div class="small muted" id="nc-info" aria-live="polite"></div>
-    <label class="f" for="nc-ch">الشابتر</label><input class="ci" id="nc-ch" dir="auto" maxlength="120" placeholder="مثال: Cornea">
+    <label class="f" for="nc-ch">الشابتر</label><input class="ci" id="nc-ch" dir="auto" maxlength="120" list="ch-names" placeholder="مثال: Cornea"><datalist id="ch-names"></datalist>
+    <p class="hint">اختار من القايمة، بنفس الاسم اللي في تطبيق الطلاب.</p>
     <label class="f" for="nc-src">المصدر</label><input class="ci" id="nc-src" dir="auto" maxlength="160" value="${esc(last.source || '')}" placeholder="مثال: Arab Board Q Bank of Ophthalmology">
     <label class="f" for="nc-years">السنين <span class="lbl-sub">(اختياري)</span></label><input class="ci" id="nc-years" dir="auto" maxlength="60" placeholder="مثال: 2010–2021">
     <p class="hint">لو سبتها فاضية، محادثة الاستخراج بتطلّع سنة كل سؤال من الملف، والكارت بيكتب أول وآخر سنة لوحده.</p>
@@ -3164,8 +3245,10 @@ function openNewChapter() {
     <div class="err" id="nc-err" role="alert"></div>
     <div class="foot"><button class="btn primary" id="nc-go" disabled>سجّل الشابتر وابدأ</button></div>`, { canClose: () => !busy || confirm('التسجيل لسه شغال. تقفل؟') });
   const $s = sel => sheet.querySelector(sel), err = t => { $s('#nc-err').textContent = t || ''; };
-  let file = null, pages = 0, busy = false;
+  let file = null, pages = 0, busy = false, names = [];
   bindHelp(sheet, '#nc-help-b', '#nc-help');
+  // 6.9: the bank's chapter names as choices (the sheet opens at once; the list fills when it arrives)
+  bankChapters().then(n => { names = n; const dl = $s('#ch-names'); if (dl) dl.outerHTML = chOptions(n); });
   $s('#nc-file').onchange = async ev => {
     file = null; pages = 0; $s('#nc-go').disabled = true; err('');
     const f = ev.target.files && ev.target.files[0]; if (!f) return;
@@ -3178,17 +3261,20 @@ function openNewChapter() {
     } catch (e) { console.warn('pdf open:', e); $s('#nc-info').textContent = ''; return err(pdfErrText(e)); }
     file = f;
     $s('#nc-info').textContent = `${pages} صفحة، ${MB(f.size)} ميجا.`;
-    const ch = $s('#nc-ch'); if (!ch.value.trim()) ch.value = f.name.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').trim();
+    // 6.9: fill the name only with a bank chapter the file name holds (the longest), never the file name itself ("lens ." on 15/10)
+    const ch = $s('#nc-ch'), fn = f.name.replace(/\.pdf$/i, '').replace(/[_.\-]+/g, ' ').toLowerCase();
+    if (!ch.value.trim()) ch.value = names.filter(x => x.length >= 3 && fn.includes(x.toLowerCase())).sort((a, b) => b.length - a.length)[0] || '';
     $s('#nc-go').disabled = false;
   };
   $s('#nc-go').onclick = async () => {
     if (!file || busy) return;
     const go = $s('#nc-go'); err('');
-    const chapter = $s('#nc-ch').value.trim(), source = $s('#nc-src').value.trim(), years = $s('#nc-years').value.trim();
+    const chapter = chCanon(names, $s('#nc-ch').value), source = $s('#nc-src').value.trim(), years = $s('#nc-years').value.trim();
     const link = $s('#nc-link').value.trim(), copy = $s('#nc-copy').checked;
     if (!chapter) return err('اكتب اسم الشابتر.');
     if (!source) return err('اكتب المصدر.');
     if (link && !DRIVE_RX.test(link)) return err('لينك درايف لازم يبدأ بـ https://drive.google.com/');
+    if (names.length && !chKnown(names, chapter) && !confirm(CH_WARN(chapter))) return;
     busy = true; go.disabled = true;
     let r = null;
     try {

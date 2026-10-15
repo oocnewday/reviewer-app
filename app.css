@@ -837,3 +837,6 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 /* 6.8: under the hidden reasons, the questions waiting for a rebuild (hidden too, in their own folder) */
 .filters .rb-note{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--line-2);line-height:1.6}
 .filters .rb-note .grow{flex:1;min-width:180px}
+/* 6.9: files left without a card (migration 066) */
+.staff .row.orph{background:var(--amber-2);border:0;border-radius:10px;padding:10px 12px;margin:8px 0}
+.staff .row.orph .grow{color:var(--ink)}
