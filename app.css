@@ -834,3 +834,6 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 @keyframes stepglow{0%,45%{box-shadow:0 0 0 3px var(--cobalt)}100%{box-shadow:0 0 0 0 transparent}}
 /* 6.7: the file name under a chapter title that two cards share */
 .staff .chap-file{margin-top:2px;overflow-wrap:anywhere}
+/* 6.8: under the hidden reasons, the questions waiting for a rebuild (hidden too, in their own folder) */
+.filters .rb-note{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--line-2);line-height:1.6}
+.filters .rb-note .grow{flex:1;min-width:180px}

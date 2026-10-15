@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.7';
-const APP_BUILD = '14/10/2026';
+const APP_VERSION = '6.8';
+const APP_BUILD = '15/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -458,7 +458,8 @@ const INFO = {
   scope: { name: '📚 الشابتر', what: 'اختار شابتر، وكل الأرقام والقوايم اللي تحت بتمشي عليه. و«الكل» يعني كل الشباتر.', free: 'الشريطين بيقولولك الشابتر خلص قد إيه: الاعتماد، والمواضيع. وسطر «📋 الباقي» بيقول اللي فاضل، وكل حاجة فيه بتفتح أسئلتها. ولما يخلص اللي وصلك، بيقولك لو فيه أسئلة لسه بتتجهز (دي شغل الإدارة، وبتوصلك لوحدها).' },
   hidden: { name: '🙈 المخفي عن الطلاب', what: 'أسئلة مش ظاهرة للطلاب دلوقتي. لما تضغطه، أسباب الإخفاء بتنوّر تحته بأرقامها:',
     list: ['ثقة منخفضة', 'مختلف مع المصدر', 'ناقص في المصدر', '<b>المراجع طلب تغيير الإجابة:</b> الإجابة عليها طلب تغيير مفتوح، أو اتغيرت ولسه التغيير ماتعتمدش. السؤال بيرجع للطلاب أول ما يتعتمد.'],
-    todo: 'شيل أي سبب مش عايزه، والقايمة بتتغير على طول. ولو في سبب نادر تاني (زي «بقرار الإدارة») بيظهر لوحده لما يبقى فيه أسئلة.' },
+    todo: 'شيل أي سبب مش عايزه، والقايمة بتتغير على طول. ولو في سبب نادر تاني (زي «بقرار الإدارة») بيظهر لوحده لما يبقى فيه أسئلة.',
+    tip: 'الأسئلة اللي مستنية إعادة تركيب مخفية عن الطلاب كمان، بس مش في القايمة دي لأنها لسه ماوصلتش للمراجعة. لو فيه منها، بيظهر تحت الأسباب سطر بعددها وزرار «افتح ←» يوديك لفولدرها.' },   // 6.8
   conf: { name: '🤖 ثقة Claude في حله', what: 'قد إيه Claude كان متأكد من الحل: عالية، أو متوسطة، أو منخفضة.', todo: 'اختار حاجة واحدة. الأقل ثقة أولى بالمراجعة.' },
   src: { name: '📄 مقارنة بملف المصدر', what: '', list: ['<b>≠ مختلف مع المصدر:</b> حل Claude غير إجابة الملف، حتى لو اتعتمد وبقى ظاهر للطلاب.', '<b>◐ ناقص في المصدر:</b> السؤال كان ناقص في الملف (أو تنبيهه بيقول كده)، حتى لو اتكمّل واتعتمد.'], todo: 'ممكن تختار الاتنين مع بعض.' },
 };
@@ -711,7 +712,11 @@ function filtersPanel(v) {
   const head = (k, help) => `<div class="fs-h"><h3>${esc(INFO[k].name)}</h3>${infoBtn(k, INFO[k].name)}</div><p class="fhelp">${help}</p>`;
   const hid = applyFilters(base, { ...v, hidden: false }).filter(isHidden), hN = countBy(hid, r => r.student_state), off = new Set(v.hidOff || []);
   const kinds = [...HID_MAIN.map(x => x[0]), ...hiddenKinds().filter(k => !HID_MAIN.some(x => x[0] === k))];
-  const reasons = v.hidden ? `<div class="parts" role="group" aria-label="أسباب الإخفاء"><p class="parts-h">مخفي بسبب: (اضغط على أي سبب تشيله أو ترجّعه)</p><div class="fopts">${kinds.map(k => opt('data-hid', k, esc(reasonLabel(k)), hN[k] || 0, !off.has(k) && (hN[k] || 0) > 0)).join('')}</div></div>` : '';
+  // 6.8 (owner 15/10): the questions waiting for a rebuild are hidden from students too, but they are not in any list yet (they open
+  // in the rebuild screen, for whoever may rebuild): one line under the reasons says how many there are, with a button to their folder
+  const rbN = v.folder === 'rebuild' ? 0 : rebuildIn(v.chapter || 'all').length;
+  const rbLine = rbN ? `<div class="rb-note"><span class="grow">🛠️ وكمان <b>${rbN}</b> ${rbN === 1 ? 'سؤال مستني إعادة تركيب، مخفي عن الطلاب، ومكانه فولدره' : 'أسئلة مستنية إعادة تركيب، مخفية عن الطلاب، ومكانها فولدرها'} مش القايمة دي.</span><button class="btn sec small" type="button" data-left="rebuild" data-ch="${esc(v.chapter || 'all')}">افتح ←</button></div>` : '';
+  const reasons = v.hidden ? `<div class="parts" role="group" aria-label="أسباب الإخفاء"><p class="parts-h">مخفي بسبب: (اضغط على أي سبب تشيله أو ترجّعه)</p><div class="fopts">${kinds.map(k => opt('data-hid', k, esc(reasonLabel(k)), hN[k] || 0, !off.has(k) && (hN[k] || 0) > 0)).join('')}</div>${rbLine}</div>` : '';
   const where = `🔍 بتدوّر جوه: <b>«${esc(listName(v))}»</b> ${v.chapter && v.chapter !== 'all' ? `في <bdi>${esc(v.chapter)}</bdi>` : 'في كل الشباتر'} – <b>${base.length} سؤال</b>`;
   return `<div class="filters">
     <div class="where">${where}</div>
