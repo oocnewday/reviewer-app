@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '6.9';
-const APP_BUILD = '15/10/2026';
+const APP_VERSION = '7.3';
+const APP_BUILD = '16/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -240,7 +240,7 @@ function renderPending() {
   document.getElementById('recheck').onclick = () => onSession(S.session);
   document.getElementById('out').onclick = signOut;
 }
-async function signOut() { stopSolverTimer(); closeSheets(); await sb.auth.signOut(); S.session = null; location.hash = ''; renderAuth('in'); }
+async function signOut() { stopSolverTimer(); resetStaffCaches(); closeSheets(); await sb.auth.signOut(); S.session = null; location.hash = ''; renderAuth('in'); }
 
 async function onSession(session) {
   S.session = session;
@@ -453,6 +453,10 @@ const INFO = {
   action: { name: '📋 المطلوب منك', what: 'كل الحاجات اللي مستنية منك إجراء، في كل الشباتر، في مكان واحد وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يفتحلك أسئلته على طول.',
     tip: 'السؤال الواحد ممكن يبقى في أكتر من سطر، زي سؤال في المراجعة وعليه موضوع مقترح (اعتماده بيأكد موضوعه لوحده)، والرقم الكبير بيعدّه مرة واحدة.' },
   // 6.6 (owner 14/10): the admin panel's own "المطلوب" button
+  // 7.0 (owner 16/10, backlog 117): the backup button; the restore has no button on purpose
+  backup: { name: '📦 النسخة الاحتياطية', what: 'نسخة واحدة فيها التطبيقين مع بعض: تطبيق الطلاب وتطبيق المراجعين، ببياناتهم وملفات البنك، في ملف واحد مقفول ومتخزن في مكان آمن بره التطبيق. النسخة بتتعمل لوحدها كل يوم الساعة 3:05 الفجر بتوقيت القاهرة، وبنحتفظ بآخر 30 نسخة يومية.',
+    free: 'مش مطلوب منك أي حاجة عشان النسخة اليومية. الزرار لو عايز نسخة دلوقتي حالًا (مثلًا قبل شغل كبير): بيعمل نسخة فورية بتاخد حوالي 10 دقايق، ومش لازم تستنى. النسخ دي بتتحفظ لوحدها (آخر 5)، ومابتمسحش أي نسخة من الـ 30.',
+    tip: 'جنب آخر نسخة مكتوب نوعها: Daily يعني النسخة اليومية، وManual يعني نسخة اتعملت بالزرار. والاسترجاع مالوش زرار، وده مقصود عشان محدش يمسح شغل بالغلط. لو احتجته، كلّم صاحب المشروع.' },
   adminact: { name: '📋 المطلوب من الإدارة', what: 'كل الخطوات اللي مستنية الإدارة في كل الشباتر، في مكان واحد، وجنب كل واحدة عددها.', todo: 'اضغط الزرار، واختار أي سطر، يوديك للخطوة في كارت الشابتر، وهناك زرار نسخ الرسالة.',
     tip: 'الرقم هو نفس رقم «يحتاج إجراء» اللي فوق اللوحة: صور الصفحات والاستخراج بيتحسبوا واحد لكل شابتر، والحل والتصنيف والتعديلات بعدد أسئلتهم. والأسئلة اللي في المراجعة أو مستنية إعادة تركيب أو تأكيد مواضيع مش هنا، لأنها شغل المراجعين.' },
   scope: { name: '📚 الشابتر', what: 'اختار شابتر، وكل الأرقام والقوايم اللي تحت بتمشي عليه. و«الكل» يعني كل الشباتر.', free: 'الشريطين بيقولولك الشابتر خلص قد إيه: الاعتماد، والمواضيع. وسطر «📋 الباقي» بيقول اللي فاضل، وكل حاجة فيه بتفتح أسئلتها. ولما يخلص اللي وصلك، بيقولك لو فيه أسئلة لسه بتتجهز (دي شغل الإدارة، وبتوصلك لوحدها).' },
@@ -852,10 +856,10 @@ window.addEventListener('hashchange', () => {
 // pause background work while the app is hidden; refresh quietly when it comes back after a while
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); stopDictation(); stopSolverTimer(); return; }
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); stopDictation(); stopSolverTimer(); stopBackupPoll(); return; }
   if (!S.session || !S.profile?.is_active) return;
   if (hiddenAt && Date.now() - hiddenAt > 120000) { S.dirty = true; if (!location.hash && !document.querySelector('.scrim')) route(); }
-  else if (!location.hash && S.isAdmin && document.getElementById('solver-box')) loadSolver(false);
+  else if (!location.hash && S.isAdmin && document.getElementById('solver-box')) { loadSolver(false); loadBackup(true); }
 });
 function topBar(inner) { return `<header class="bar"><div class="bar-in">${inner}</div></header>`; }
 const remaining = () => `فاضلك ${S.queue.length} سؤال`;
@@ -1003,7 +1007,7 @@ function renderQueue() {
   const sa = document.getElementById('staff-act'); if (sa) sa.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); openAdminActions(); };   // the count in the title: the list, not open/close
   bindInstall();
   const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
-  if (S.isAdmin && S.pipeline) loadSolver();
+  if (S.isAdmin && S.pipeline) { loadSolver(); loadBackup(); loadAccess(); }   // 7.0: the backup line and the owner's access switches
 }
 
 /* What students see for each question (student_state from the database, migration 026).
@@ -2936,7 +2940,8 @@ function staffCard() {
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
   return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
     <span class="small muted" style="margin-inline-start:8px">${act && chs ? `<button class="staff-act" type="button" id="staff-act">${act} يحتاج إجراء</button>` : act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
-    ${chs ? adminTodoButton(act) : ''}${orphanLine()}${newBtn}${body}
+    ${chs ? adminTodoButton(act) : ''}${backupBoxHTML()}${orphanLine()}${newBtn}${body}
+    ${accessBoxHTML()}
     <details class="solver-d" id="solver-d" ${localStorage.getItem('solverOpen') === '1' ? 'open' : ''}><summary>🤖 المحلّل الآلي (مدفوع): <span id="solver-sum" class="small muted">جاري التحميل…</span></summary>
       <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div></details>
     ${bankLine(chs) || `<div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>`}
@@ -3409,6 +3414,208 @@ function openPagesSheet(run, bytes) {
     } finally { if (doc) doc.destroy().catch(() => { }); }
   })();
 }
+/* ---------- 7.0, on the final contract in 7.1 (owner 16/10, integration_backlog 117; the same in the students panel 1.8) ----------
+   "📦 اعمل نسخة احتياطية دلوقتي". One copy holds both apps (the students' database, the bank and the bank's files) in one locked file;
+   the daily copy runs on the server at 3:05 AM Cairo time, the button makes an extra one. nd-backup decides who may use it (the owner,
+   or an active admin with profiles.can_backup): a 403 on status = no button at all. The replies carry no file names, links or sizes.
+   After a run: "⏳ فيه نسخة شغالة" at once and status every 30 s for up to 15 minutes; the copy is done when running = false and
+   last.at is newer than the copy known at the press (GitHub takes a few seconds to show the run, so the first reply may still be the
+   old copy with running = false). A 401 renews the session once and asks again. */
+const BKP = { code: 0, st: null, at: 0, note: '', busy: false, since: 0, timer: null, pending: false, waitNewer: false, prevAt: null, mine: false, denied: false };
+const BKP_MSG = { running: '⏳ فيه نسخة شغالة', 409: '⏳ فيه نسخة شغالة دلوقتي. استنى لما تخلص.', 429: '⏳ اتعملت نسخة من شوية. جرّب تاني بعد نص ساعة.',
+  404: 'لسه بيتجهّز', 403: 'مش معاك صلاحية النسخ الاحتياطي.', 401: 'سجّل دخول تاني وجرّب.', err: 'مش قادرين نوصل دلوقتي. جرّب بعد شوية.',
+  stale: '⚠️ النسخة اليومية ماتعملتش من أكتر من يوم ونص. بلّغ المسؤول.', dailyFail: '⚠️ آخر نسخة يومية مانجحتش. بلّغ المسؤول.',
+  // 7.3 (domain track 16/10, owner): the key behind the button runs out once a year (nd-backup v2: status.token_expires_at, 503 key_expired)
+  keyExpired: '⚠️ مفتاح زرار النسخ خلص، والزرار مش هيشتغل لحد ما صاحب المشروع يجدده. النسخة اليومية شغالة عادي.' };
+const BKP_KEY_WARN = 14 * 86400000;   // the owner sees the key warning from 14 days before (14 days exactly included)
+const keyExpired = r => r.code === 503 && r.data && r.data.error === 'key_expired';
+// the last day the key works, Cairo date, "السبت 9/10/2027": the key ends at a Cairo midnight, so one second before it
+function keyLastDay(iso) {
+  const t = new Date(iso).getTime(); if (isNaN(t)) return '';
+  try {
+    const p = {}; new Intl.DateTimeFormat('ar-EG-u-nu-latn', { timeZone: 'Africa/Cairo', weekday: 'long', day: 'numeric', month: 'numeric', year: 'numeric' })
+      .formatToParts(new Date(t - 1000)).forEach(x => { p[x.type] = x.value; });
+    return `${p.weekday} ${p.day}/${p.month}/${p.year}`;
+  } catch { return new Date(t - 1000).toLocaleDateString(); }
+}
+const BKP_KIND = { daily: 'Daily', manual: 'Manual' };   // shown in English, as in the students panel (owner 16/10)
+const BKP_POLL_MAX = 15 * 60000, BKP_STALE = 36 * 3600000;
+async function backupCall(action, retried) {
+  let r;
+  try {
+    const { data, error } = await sb.functions.invoke('nd-backup', { body: { action } });
+    if (!error) return { code: action === 'run' ? 202 : 200, data: data || {} };
+    const status = Number(error.context && error.context.status) || 0;   // no status = the request never got an answer (network)
+    let d = null; try { d = await error.context.json(); } catch { }
+    r = { code: status || -1, data: d || {} };
+  } catch (e) { console.warn('nd-backup:', e && e.message); r = { code: -1, data: {} }; }
+  // 401 = the session ran out or the token is old (not the server down): renew it once and ask again (a refused run did not run)
+  if (r.code === 401 && !retried) { try { await sb.auth.refreshSession(); } catch (e) { console.warn('refresh:', e && e.message); } return backupCall(action, true); }
+  return r;
+}
+// "الجمعة 16/10 – 3:05 ص", Cairo time, Western digits as everywhere in the app
+function cairoTime(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  try {
+    const p = {}; new Intl.DateTimeFormat('ar-EG-u-nu-latn', { timeZone: 'Africa/Cairo', weekday: 'long', day: 'numeric', month: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+      .formatToParts(d).forEach(x => { p[x.type] = x.value; });
+    return `${p.weekday} ${p.day}/${p.month} – ${p.hour}:${p.minute} ${p.dayPeriod || ''}`.trim();
+  } catch { return d.toLocaleString(); }
+}
+const backupBoxHTML = () => '<div class="row bkp" id="bkp-box" hidden></div>';
+// the lines under the button, as HTML (every value escaped; Daily / Manual in their own <bdi> so the Arabic line keeps its order)
+function backupLines() {
+  const st = BKP.st || {}, l = st.last, dl = st.last_daily, out = [], line = (t, cls) => out.push({ h: esc(t), cls });
+  if (BKP.code === 404) return [{ h: esc(BKP_MSG[404]) }];
+  if (BKP.code === 503) return [{ h: esc(BKP_MSG.keyExpired), cls: 'bkp-warn', how: true }];   // 7.3: for whoever sees the button
+  if (BKP.code === 401) return [{ h: esc(BKP_MSG[401]) }];
+  if (BKP.code !== 200) return [{ h: esc(BKP_MSG.err) }];
+  const busy = st.running || BKP.pending;
+  if (BKP.note) line(BKP.note);
+  else if (busy) line(BKP_MSG.running);
+  else if (!l || !l.at) line('لسه مفيش نسخ متعملة.');
+  else if (l.ok) out.push({ h: `آخر نسخة: ${esc(cairoTime(l.at))}${BKP_KIND[l.kind] ? ` <bdi dir="ltr">${BKP_KIND[l.kind]}</bdi>` : ''} ✅` });
+  else line('❌ آخر محاولة مانجحتش');
+  // the last copy was one made by the button: the daily one too, so nobody wonders whether it still runs
+  // (7.2: only when it worked; a failed one has its own warning below)
+  if (!BKP.note && !busy && l && l.kind === 'manual' && dl && dl.at && dl.ok === true) line(`آخر نسخة يومية: ${cairoTime(dl.at)} ✅`, 'muted');
+  // the daily copy stopped (domain track change 5, owner 16/10, the same in the students panel), in this order: the last one failed;
+  // else none for a day and a half; no daily copy yet at all (null): no warning
+  if (dl) {
+    if (dl.ok === false) line(BKP_MSG.dailyFail, 'bkp-warn');
+    else if (dl.at && Date.now() - new Date(dl.at).getTime() > BKP_STALE) line(BKP_MSG.stale, 'bkp-warn');
+  }
+  // 7.3: the owner only, every time the panel opens: the key runs out within 14 days
+  const exp = st.token_expires_at ? new Date(st.token_expires_at).getTime() : NaN;
+  if (ACC.owner && !isNaN(exp) && exp - Date.now() <= BKP_KEY_WARN) out.push({ h: esc(`⚠️ مفتاح زرار النسخ قرّب يخلص. آخر يوم هيشتغل فيه: ${keyLastDay(st.token_expires_at)}.`), cls: 'bkp-warn', how: true });
+  return out;
+}
+function renderBackup() {
+  const box = document.getElementById('bkp-box'); if (!box) return;
+  if (!BKP.code || BKP.code === 403) { box.hidden = true; box.innerHTML = ''; return; }
+  const st = BKP.st || {};
+  const off = BKP.busy || BKP.denied || BKP.code === 404 || BKP.code === 503 || (BKP.code === 200 && (st.running || BKP.pending));
+  // 7.3: «إزاي أجدده؟» under a key line, for the owner only (an admin sees the key_expired line alone)
+  box.innerHTML = `<div class="grow"><div class="bkp-h"><button class="btn sec" type="button" id="bkp-run" ${off ? 'disabled' : ''}>${BKP.busy ? 'جاري الطلب…' : '📦 اعمل نسخة احتياطية دلوقتي'}</button>${infoBtn('backup', INFO.backup.name)}</div>
+    ${backupLines().map((x, i) => `<div class="small bkp-l ${x.cls || ''}" ${i ? '' : 'role="status"'}>${x.h}</div>${x.how && ACC.owner ? '<button class="linkbtn small bkp-how" type="button" data-key-how>إزاي أجدده؟</button>' : ''}`).join('')}</div>`;
+  box.hidden = false;
+  box.querySelector('#bkp-run').onclick = runBackup;
+  box.querySelector('[data-info]').onclick = () => explain('backup');
+  const how = box.querySelector('[data-key-how]'); if (how) how.onclick = keyHowTo;
+}
+// a status reply; while waiting for a copy, decide whether it is done
+function applyStatus(d) {
+  BKP.code = 200; BKP.st = d; BKP.at = Date.now();
+  if (!BKP.pending) return;
+  const l = d.last, newer = !!(l && l.at && (!BKP.prevAt || new Date(l.at).getTime() > new Date(BKP.prevAt).getTime()));
+  if (!d.running && (!BKP.waitNewer || newer)) finishBackup();
+}
+async function loadBackup(force) {
+  if (!S.isAdmin) return;
+  if (!force && BKP.code && Date.now() - BKP.at < 60000) { renderBackup(); return; }   // the panel re-renders after every action: once a minute is enough
+  const r = await backupCall('status');
+  if (r.code === 200) {
+    if (!BKP.timer) { BKP.pending = false; BKP.note = ''; BKP.mine = false; }   // a fresh read when nothing is being followed (also after the 15 minutes)
+    applyStatus(r.data);
+    if (r.data.running && !BKP.timer) { BKP.pending = true; BKP.waitNewer = false; startBackupPoll(); }   // a copy already running (from here or elsewhere)
+  } else { BKP.code = [401, 403, 404].includes(r.code) ? r.code : keyExpired(r) ? 503 : -1; BKP.at = Date.now(); }
+  renderBackup();
+}
+async function runBackup() {
+  if (BKP.busy) return;
+  BKP.busy = true; BKP.note = ''; renderBackup();
+  const prevAt = BKP.st && BKP.st.last && BKP.st.last.at || null;
+  const r = await backupCall('run');
+  BKP.busy = false;
+  if (r.code === 202) {
+    Object.assign(BKP, { pending: true, waitNewer: true, prevAt, mine: true });
+    notify('بدأنا النسخة.', 'بتاخد حوالي 10 دقايق، ومش لازم تستنى.'); startBackupPoll();
+  } else if (r.code === 409) { Object.assign(BKP, { pending: true, waitNewer: false, mine: false, note: BKP_MSG[409] }); startBackupPoll(); }
+  else if (r.code === 403) { BKP.denied = true; BKP.note = BKP_MSG[403]; }
+  else if (r.code === 404) BKP.code = 404;
+  else if (keyExpired(r)) BKP.code = 503;   // 7.3: the button stays off with the key line
+  else BKP.note = r.code === 429 ? BKP_MSG[429] : r.code === 401 ? BKP_MSG[401] : BKP_MSG.err;
+  renderBackup();
+}
+function startBackupPoll() {
+  stopBackupPoll(); BKP.since = Date.now();
+  BKP.timer = setInterval(async () => {
+    if (Date.now() - BKP.since > BKP_POLL_MAX) { stopBackupPoll(); renderBackup(); return; }   // 15 minutes: the line stays as it is; the next opening asks again
+    const r = await backupCall('status');
+    if (r.code === 200) applyStatus(r.data);
+    else if (keyExpired(r)) { stopBackupPoll(); Object.assign(BKP, { code: 503, pending: false, waitNewer: false, mine: false, note: '' }); }   // 7.3
+    renderBackup();
+  }, 30000);
+}
+function stopBackupPoll() { if (BKP.timer) { clearInterval(BKP.timer); BKP.timer = null; } }
+// another account may sign in on the same device: nothing of the last one's backup state or access list stays
+function resetStaffCaches() { stopBackupPoll(); Object.assign(BKP, { code: 0, st: null, at: 0, note: '', busy: false, since: 0, pending: false, waitNewer: false, prevAt: null, mine: false, denied: false }); ACC.rows = null; ACC.at = 0; ACC.owner = false; }
+function finishBackup() {
+  stopBackupPoll(); const mine = BKP.mine;
+  Object.assign(BKP, { pending: false, waitNewer: false, prevAt: null, mine: false, note: '', since: 0 });
+  const l = BKP.st && BKP.st.last;
+  if (mine && l && l.at) { if (l.ok) notify('اتعملت النسخة الاحتياطية بفضل الله', `آخر نسخة: ${cairoTime(l.at)}`); else notify('❌ آخر محاولة مانجحتش', 'جرّب تاني بعد شوية.', 'info'); }
+}
+/* 7.0: "👥 صلاحيات الحسابات" for the owner only: a switch per admin for the backup button (profiles.can_backup). The bank shows
+   other people's rows to the owner only and lets only the owner change them (profiles_self_read, profiles_owner_write), so an
+   admin sees nothing of it. */
+const ACC = { rows: null, at: 0, owner: false };   // 7.3: owner = the key lines and «إزاي أجدده؟» in the backup box
+const accessBoxHTML = () => '<details class="acc-d" id="acc-d" hidden><summary>👥 صلاحيات الحسابات</summary><div id="acc-box"></div></details>';
+async function loadAccess(force) {
+  if (!S.isAdmin) return;
+  if (force || !ACC.at || Date.now() - ACC.at > 120000) {
+    try {
+      const { data, error } = await sb.from('profiles').select('user_id, display_name, email, role, can_backup').eq('is_active', true).in('role', ['owner', 'admin']);
+      if (error) throw error;
+      const me = (data || []).find(x => x.user_id === S.session?.user?.id);
+      ACC.owner = !!(me && me.role === 'owner');
+      ACC.rows = ACC.owner ? (data || []).filter(x => x.role === 'admin').sort((a, b) => String(a.display_name || '').localeCompare(String(b.display_name || ''))) : null;
+    } catch (e) { console.warn('access:', e && e.message); ACC.rows = null; ACC.owner = false; }
+    ACC.at = Date.now();
+  }
+  renderAccess(); renderBackup();   // 7.3: the backup box may have been drawn before we knew this is the owner
+}
+/* 7.3 (domain track 16/10, owner): how the owner renews the key, inside the app. Fixed text and links (no secret here: the key
+   itself is pasted by the owner into the projects' secrets and never passes through this app). */
+const KEY_LINKS = { gh: 'https://github.com/settings/personal-access-tokens', students: 'https://supabase.com/dashboard/project/wymcsdzuwzabjdjpuprc/functions/secrets',
+  bank: 'https://supabase.com/dashboard/project/djqsffknczddefukbuzu/functions/secrets' };
+function keyHowTo() {
+  if (!ACC.owner) return;
+  const link = u => `<div class="kh-link"><a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a></div>`, en = t => `<bdi dir="ltr">${t}</bdi>`;
+  const { sheet, close } = openSheet(`<div class="sheet-head"><h2>🔑 إزاي أجدد مفتاح زرار النسخ؟</h2></div>
+    <ol class="steps kh">
+      <li>افتح صفحة المفاتيح في ${en('GitHub')}، ولازم تكون داخل بحساب المستودع:${link(KEY_LINKS.gh)}</li>
+      <li>دوس على المفتاح اللي اسمه ${en('ooc-backup-button')}.</li>
+      <li>دوس ${en('Regenerate token')}، واختار مدة سنة، وأكّد.</li>
+      <li>انسخ المفتاح الجديد، لأنه بيظهر مرة واحدة بس.</li>
+      <li>افتح أسرار مشروع الطلاب، واكتب الاسم ${en('GH_BACKUP_TOKEN')}، والصق المفتاح الجديد، واحفظ:${link(KEY_LINKS.students)}</li>
+      <li>نفس الكلام في أسرار مشروع البنك:${link(KEY_LINKS.bank)}</li>
+      <li>افتح اللوحة تاني بعد دقيقة، والتحذير هيختفي لوحده. ولو لسه ظاهر، ابعت صورة لشات مسار الدومين.</li>
+    </ol>
+    <div class="foot"><button class="btn" type="button" data-close>تمام</button></div>`);
+  sheet.querySelector('[data-close]').onclick = () => close();
+}
+function renderAccess() {
+  const d = document.getElementById('acc-d'), box = document.getElementById('acc-box'); if (!d || !box) return;
+  if (!ACC.rows) { d.hidden = true; return; }
+  box.innerHTML = `<p class="hint">مين من الإدارة يقدر يعمل نسخة احتياطية بزرار «📦». النسخة اليومية بتتعمل لوحدها كل يوم مهما كان الاختيار هنا.</p>` +
+    (ACC.rows.length ? ACC.rows.map(r => `<label class="acc-row"><span class="grow"><b>${esc(r.display_name || '—')}</b>${r.email ? `<span class="small muted acc-mail"><bdi dir="ltr">${esc(r.email)}</bdi></span>` : ''}</span>
+      <span class="acc-sw"><input type="checkbox" data-bkp-user="${esc(r.user_id)}" ${r.can_backup ? 'checked' : ''}> 📦 يقدر يعمل نسخة احتياطية</span></label>`).join('')
+      : '<div class="small muted">مفيش حسابات إدارة تانية دلوقتي.</div>');
+  d.hidden = false;
+  box.querySelectorAll('[data-bkp-user]').forEach(cb => cb.onchange = async () => {
+    const r = ACC.rows.find(x => x.user_id === cb.dataset.bkpUser); if (!r) return;
+    const on = cb.checked, name = r.display_name || '—';
+    if (!confirm(on ? `تدّي «${name}» صلاحية زرار النسخة الاحتياطية؟` : `تشيل من «${name}» صلاحية زرار النسخة الاحتياطية؟`)) { cb.checked = !on; return; }
+    cb.disabled = true;
+    try {
+      const { data, error } = await sb.from('profiles').update({ can_backup: on }).eq('user_id', r.user_id).select('can_backup');
+      if (error || !Array.isArray(data) || !data.length) throw error || new Error('not saved');   // no row back = the bank did not allow it
+      r.can_backup = on; notify('اتحفظت الصلاحية بفضل الله', on ? `«${name}» هيشوف زرار النسخة الاحتياطية.` : `«${name}» مش هيشوف زرار النسخة الاحتياطية.`);
+    } catch (e) { console.warn('access save:', e); cb.checked = !on; notify('الصلاحية ماتحفظتش', 'مفيش حاجة اتغيرت. جرّب تاني بعد شوية.', 'info'); }
+    cb.disabled = false;
+  });
+}
 /* ---------- paid API solver (staff panel) ---------- */
 const PHASE_AR = {
   solve: 'Anthropic يحل الأسئلة الآن كدفعة (Batch): عادةً أقل من ساعة، وقد تصل إلى 24 ساعة. النتائج تُحفظ في القاعدة عند فتح هذه الصفحة.',
@@ -3563,7 +3770,7 @@ function diffBase(b) {
 let currentUser = null;
 sb.auth.onAuthStateChange((event, session) => {
   if (event === 'PASSWORD_RECOVERY') { S.recovery = true; S.session = session; setTimeout(() => renderAuth('reset'), 0); return; }
-  if (event === 'SIGNED_OUT') { currentUser = null; S.session = null; S.profile = null; setTimeout(() => renderAuth('in'), 0); return; }
+  if (event === 'SIGNED_OUT') { resetStaffCaches(); currentUser = null; S.session = null; S.profile = null; setTimeout(() => renderAuth('in'), 0); return; }
   if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
     const uid = session?.user?.id || null;
     if (event === 'SIGNED_IN' && uid && uid === currentUser) { S.session = session; return; } // token refresh / tab focus

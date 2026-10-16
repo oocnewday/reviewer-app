@@ -840,3 +840,22 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 /* 6.9: files left without a card (migration 066) */
 .staff .row.orph{background:var(--amber-2);border:0;border-radius:10px;padding:10px 12px;margin:8px 0}
 .staff .row.orph .grow{color:var(--ink)}
+/* 7.0: backup button (backlog 117) and the owner's access switches */
+.staff .row.bkp{border-top:0;padding:4px 0 10px}
+.staff .bkp-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.staff .bkp-l{margin-top:6px}
+.staff .acc-d{border-top:1px solid var(--line-2);padding:10px 0}
+.staff .acc-d>summary{cursor:pointer;list-style:none;font-weight:600;color:var(--cobalt);min-height:36px;display:flex;align-items:center;gap:6px}
+.staff .acc-d>summary::-webkit-details-marker{display:none}
+.staff .acc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:10px 0;border-top:1px solid var(--line-2);cursor:pointer}
+.staff .acc-row .grow{flex:1;min-width:160px}
+.staff .acc-mail{display:block}
+.staff .acc-sw{display:inline-flex;align-items:center;gap:8px;min-height:44px;white-space:nowrap;font-weight:600}
+.staff .acc-sw input{width:22px;height:22px}
+/* 7.1: the daily-copy warning line */
+.staff .bkp-l.bkp-warn{color:var(--warn);font-weight:600}
+/* 7.3: «إزاي أجدده؟» under the key line (owner only), and the links in its steps (long URLs wrap on small phones) */
+.staff .bkp-how{display:block;margin-top:2px;padding:4px 0;min-height:32px}
+.kh-link{direction:ltr;unicode-bidi:isolate;text-align:right;overflow-wrap:anywhere;word-break:break-all;font-size:.88rem;line-height:1.5;margin-top:4px}
+.kh-link a{color:var(--cobalt)}
+.steps.kh bdi{white-space:nowrap}
