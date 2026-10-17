@@ -14,8 +14,8 @@ const msgSolveBatch = batch => `${MSG_SOLVE}\nالدفعة: ${batch}`;
 const msgTopics = c => `${chatMsg('محادثة تصنيف المواضيع')}\n${c.batch_id ? `الدفعة: ${c.batch_id}` : `الملف: ${c.source_file || ''}`}`;
 const HAND_LABEL = 'ملاحظة منقولة من ملف الأسئلة – مكتوبة بخط اليد';
 const MAX_REC_SECONDS = 600;
-const APP_VERSION = '7.3';
-const APP_BUILD = '16/10/2026';
+const APP_VERSION = '7.4';
+const APP_BUILD = '17/10/2026';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const S = { session: null, profile: null, isAdmin: false, rows: [], rebuild: [], queue: [], notices: [], pipeline: null, bundle: null, qid: null, showExtra: false, noteOpen: false, noteDraft: '', view: null, recovery: false, studentUrl: null, studentUrlAt: 0 };
@@ -256,7 +256,8 @@ async function onSession(session) {
     S.resumeChecked = true;
     const r = Resume.read();
     if (r && Date.now() - r.ts < 14 * 864e5) {
-      if (!location.hash && r.hash) history.replaceState(null, '', r.hash);
+      // 7.4 (owner 17/10): the app opens on its first screen; it comes back only into work left open (a question, a rebuild, a chapter's topics)
+      if (!location.hash && r.hash && /^#(q|rebuild|resolve|topics)\//.test(r.hash)) history.replaceState(null, '', r.hash);
       if (r.sheet && location.hash === r.hash) S.pendingSheet = r.sheet;
       if (r.hash && r.hash.startsWith('#q/')) S.resumedHere = true;
     }
@@ -559,15 +560,29 @@ function tileSubs(rows) {
     ...partSubs(rows, 'notappr'), ...(S.topicC ? partSubs(rows, 'untopic') : {}),   // 6.4
   };
 }
+/* 7.4 (owner 17/10): each group closes to one line, its name and one number; a tap opens it. The number counts every question once
+   (the folders overlap: «لم تُفتح» is part of «تنتظرك», and a question can be in «لم تُعتمد» and «لم تتأكد مواضيعها» at once); each
+   folder's own number stays its real count. The group of the open folder opens by itself; the others stay as the reviewer left them
+   while the app is open (sessionStorage: a new opening starts closed). */
+const fgOpen = () => {
+  if (!S.fgOpen) { try { S.fgOpen = new Set(JSON.parse(sessionStorage.getItem('fgOpen') || '[]')); } catch { S.fgOpen = new Set(); } }
+  return S.fgOpen;
+};
+const fgSave = () => { try { sessionStorage.setItem('fgOpen', JSON.stringify([...fgOpen()])); } catch { } };
 function folderGrid(v, counts, subs = {}) {   // 5.5 (owner 6/10): every folder shows, even at 0; who sees which folder is decided later in the admin panel
-  const one = v.chapter && v.chapter !== 'all';
-  return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, sub, ids]) => {
+  const one = v.chapter && v.chapter !== 'all', scoped = inScope(S.rows), open = fgOpen();
+  const gOf = id => FOLDER_GROUPS.findIndex(g => g[2].includes(id));
+  if (S.fgFolder !== v.folder) { S.fgFolder = v.folder; if (gOf(v.folder) >= 0) { open.add(gOf(v.folder)); fgSave(); } }   // a newly opened folder: its group opens
+  return `<nav class="fgrid" aria-label="الفولدرات">${FOLDER_GROUPS.map(([title, sub, ids], gi) => {
     const tiles = ids.map(id => FOLDERS.find(f => f.id === id)).filter(f => f && (S.topicC || !TOPIC_FOLDERS.includes(f.id)));   // no topic tiles before migration 048
     if (!tiles.length) return '';
     const head = ids.includes('topicwait') ? `${title} ${one ? 'الشابتر' : 'الشباتر'}` : title;
-    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id), s = n && Array.isArray(subs[f.id]) ? subs[f.id].map((x, i, a) => `<span class="nw${subs[f.id + 'Wrap'] ? ' wr' : ''}">${esc(x)}${i < a.length - 1 ? '\u00a0+' : ''}</span>`).join(' ') : '';
+    const tile = f => { const n = counts[f.id], on = v.folder === f.id, name = folderName(f.id), s = n && Array.isArray(subs[f.id]) ? subs[f.id].map((x, i, a) => `<span class="nw${subs[f.id + 'Wrap'] ? ' wr' : ''}">${esc(x)}${i < a.length - 1 ? ' +' : ''}</span>`).join(' ') : '';
       return `<div class="ftile${n ? '' : ' zero'}${n && HOT.has(f.id) && !infoOnly(f.id, subs) ? ' hot' : ''}${n && DONE.has(f.id) ? ' done' : ''}${infoOnly(f.id, subs) ? ' info-t' : ''}" data-on="${on}"><button class="ft-main" type="button" data-folder="${f.id}" aria-pressed="${on}"><span class="ft-l">${esc(name)}${s ? `<span class="ft-s">${s}</span>` : ''}</span><span class="ft-n">${n}</span></button>${infoBtn(f.id, name)}</div>`; };
-    return `<section class="fgroup" aria-label="${esc(head)}"><div class="fg-h">${esc(head)}</div><p class="fg-s">${esc(sub)}</p><div class="fg">${tiles.map(tile).join('')}</div></section>`;
+    const qs = new Set();
+    tiles.forEach(f => (f.id === 'rebuild' ? inScope(S.rebuild || []) : scoped.filter(f.test)).forEach(r => qs.add(r.qid)));
+    const hot = tiles.some(f => counts[f.id] && HOT.has(f.id) && !infoOnly(f.id, subs));
+    return `<details class="fgroup" data-g="${gi}" ${open.has(gi) ? 'open' : ''}><summary class="fg-sum"><span class="fg-h">${esc(head)}</span><span class="fg-n${qs.size ? hot ? ' hot' : '' : ' zero'}" aria-label="${qs.size} سؤال">${qs.size}</span></summary><p class="fg-s">${esc(sub)}</p><div class="fg">${tiles.map(tile).join('')}</div></details>`;
   }).join('')}</nav>`;
 }
 // 6.4: the kinds of a mixed folder, right above its list: «الكل» or one kind (one choice, a kind at 0 can't be picked)
@@ -606,7 +621,9 @@ function todoButton() {
 // open a folder from anywhere (the actions sheet, the admin panel, the chapter summary): optional parts, chapter and a clean filter
 function goFolder(folder, { parts, chapter = 'all', clear = true } = {}) {
   S.view = { ...S.view, ...(clear ? NO_FILTERS : {}), folder, chapter: chapter && chapter !== 'all' && chapterList().includes(chapter) ? chapter : 'all', tparts: parts || [], part: '' };
-  saveView(); S.listLimit = 60; closeSheets(); renderQueue(); toList();
+  saveView(); S.listLimit = LIST_FIRST; closeSheets();
+  if (!isListHash(location.hash)) { S.pendingToList = true; location.hash = listHash(); return; }   // 7.4: route() draws the list and slides to it
+  renderQueue(); toList();
 }
 // 6.0: the list sits under the folder groups, so opening a folder slides the page down to it (and "⬆ الفولدرات" goes back)
 function toList() {
@@ -819,6 +836,10 @@ function studentRowHTML(b, q) {
   if (!href) return line;
   return `<div class="svrow">${line}<a class="svlink" id="open-student" href="${esc(href)}" target="_blank" rel="noopener noreferrer">👁️ افتحه في تطبيق الطلاب</a></div>`;
 }
+/* 7.4 (owner 17/10): an owner or admin opens on a home screen with two entries, «🛡️ لوحة الإدارة» (#admin) and «📝 لوحة المراجعة»
+   (#review), each a page of its own; a reviewer has the review panel only, at '' as before. Every "back to the list" goes to #review. */
+const listHash = () => (S.isAdmin ? '#review' : '');
+const isListHash = h => h === '#review' || (h === '' && !S.isAdmin);
 async function route() {
   if (!S.view) S.view = loadView();
   const m = location.hash.match(/^#q\/(\d+)/);
@@ -834,22 +855,33 @@ async function route() {
       closeSheets();
       const fresh = S.rowsAt && Date.now() - S.rowsAt < 60000 && !S.dirty;
       if (!fresh) await loadQueue();
-      renderQueue();
-      if (S.listScroll) { const y = S.listScroll; requestAnimationFrame(() => scrollTo(0, y)); }
+      const h = location.hash;
+      if (S.isAdmin && h === '#admin') {   // 7.4: back from a screen the panel opened (topics, a report): the same place on the page
+        renderAdmin();
+        if (S.adminScroll) { const y = S.adminScroll; requestAnimationFrame(() => scrollTo(0, y)); }
+      } else if (S.isAdmin && h !== '#review') renderHome();
+      else {
+        renderQueue();
+        if (S.pendingToList) { S.pendingToList = false; toList(); }   // 7.4: a folder opened from another page
+        else if (S.listScroll) { const y = S.listScroll; requestAnimationFrame(() => scrollTo(0, y)); }
+      }
     }
   } catch (e) {
     console.error('route:', e);
-    if (!location.hash && !S.viewReset) {   // 5.0.1: a broken saved view must never lock the app on its first screen
+    if (isListHash(location.hash) && !S.viewReset) {   // 5.0.1: a broken saved view must never lock the app on its first screen
       S.viewReset = true;
       try { Object.assign(S.view, { folder: 'todo', showFilters: false, ...NO_FILTERS }); saveView(); renderQueue(); return; } catch (e2) { console.error('route retry:', e2); }
     }
-    $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { location.hash = ''; route(); }; }
+    $app.innerHTML = `<div class="wrap"><div class="empty">${esc(errText(e))}<p><button class="btn" id="err-back">رجوع للقائمة</button></p></div></div>`; document.getElementById('err-back').onclick = () => { if (location.hash === listHash()) route(); else location.hash = listHash(); }; }
 }
 let lastHash = location.hash;
 window.addEventListener('hashchange', () => {
   const inQ = h => h.startsWith('#q/') || h.startsWith('#rebuild/') || h.startsWith('#resolve/');
-  if (!inQ(lastHash) && !lastHash.startsWith('#report/') && lastHash !== '#activity' && inQ(location.hash)) S.listScroll = scrollY;   // leaving the list
-  if (!location.hash) { /* back to list keeps listScroll */ } else if (!inQ(location.hash) && !location.hash.startsWith('#report/')) S.listScroll = 0;
+  if (isListHash(lastHash) && inQ(location.hash)) S.listScroll = scrollY;   // leaving the list
+  if (isListHash(location.hash)) { /* back to list keeps listScroll */ } else if (!inQ(location.hash) && !location.hash.startsWith('#report/')) S.listScroll = 0;
+  // 7.4: the admin page keeps its place while a screen it opened is on (a chapter's topics, a report, a question from there)
+  if (lastHash === '#admin' && location.hash !== '#admin') S.adminScroll = scrollY;
+  else if (location.hash === '' || location.hash === '#review') S.adminScroll = 0;
   lastHash = location.hash;
   if (S.session && S.profile?.is_active) route();
 });
@@ -858,8 +890,8 @@ let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); stopDictation(); stopSolverTimer(); stopBackupPoll(); return; }
   if (!S.session || !S.profile?.is_active) return;
-  if (hiddenAt && Date.now() - hiddenAt > 120000) { S.dirty = true; if (!location.hash && !document.querySelector('.scrim')) route(); }
-  else if (!location.hash && S.isAdmin && document.getElementById('solver-box')) { loadSolver(false); loadBackup(true); }
+  if (hiddenAt && Date.now() - hiddenAt > 120000) { S.dirty = true; if (['', '#review', '#admin'].includes(location.hash) && !document.querySelector('.scrim')) route(); }
+  else if (location.hash === '#admin' && S.isAdmin && document.getElementById('solver-box')) { loadSolver(false); loadBackup(true); }
 });
 function topBar(inner) { return `<header class="bar"><div class="bar-in">${inner}</div></header>`; }
 const remaining = () => `فاضلك ${S.queue.length} سؤال`;
@@ -894,6 +926,11 @@ function centerScope() {
   const edge = () => { const max = sc.scrollWidth - sc.clientWidth, x = Math.abs(sc.scrollLeft); sc.classList.toggle('more-s', x > 2); sc.classList.toggle('more-e', x < max - 2); };
   edge(); sc.addEventListener('scroll', edge, { passive: true });
 }
+// 7.4 (owner 17/10): a list shows its first 5 questions; «عرض المزيد» shows up to 60, then 60 more each time (as before)
+const LIST_FIRST = 5, LIST_PAGE = 60;
+// 7.4: the two panels and the home screen share the top bar; the panels have «🏠 الرئيسية» (owner and admin only)
+const mainBar = () => topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span>${installBtn()}<span class="small muted who">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`);
+const homeRow = name => S.isAdmin ? `<div class="home-row"><a class="home-link" href="#" id="go-home"><span aria-hidden="true">🏠</span> الرئيسية</a><span class="home-here">${name}</span></div>` : '';
 function renderQueue() {
   S.bundle = null; S.qid = null; S.navHold = null; closeSheets();
   const v = S.view, list = listFor();
@@ -902,14 +939,14 @@ function renderQueue() {
   counts.rebuild = inScope(S.rebuild || []).length;
   const isRb = v.folder === 'rebuild';
   const activeFilters = (v.conf !== 'all') + v.disagree + v.incomplete + !!v.hidden;   // 6.0: no topic filter (its states are folders)
-  const shown = list.slice(0, S.listLimit || 60);
+  const shown = list.slice(0, S.listLimit || LIST_FIRST);
   const items = isRb ? shown.map(rbItem).join('') : shown.map(r => `<li><a href="#q/${r.qid}">
       <span class="qid">${r.seen ? '' : '<span class="dot-new" title="لم تُفتح"></span>'}${esc(r.qid_display)}</span>
       <span class="qmeta"><span>${esc(r.chapter || '')}</span>${r.years ? ` <span class="small muted">(${esc(r.years)})</span>` : ''}<div class="code">${esc(r.code || '')}</div><div class="tags">${reasonTags(r, ['all', 'alerts', 'notappr'].includes(v.folder))}</div>${studentLine(r.student_state)}${v.folder === 'notes' && r.note_text ? notePreview(r) : ''}${lastLine(r)}</span>
     </a></li>`).join('');
-  $app.innerHTML = topBar(`<span class="brand">مراجعة OOC</span><span class="grow"></span>${installBtn()}<span class="small muted who">${esc(S.profile.display_name || '')}</span><button class="linkbtn quiet" id="out">خروج</button>`) + `
+  $app.innerHTML = mainBar() + `
   <main class="wrap">
-    ${staffCard()}
+    ${homeRow('📝 لوحة المراجعة')}
     ${todoButton()}
     <a class="feed-btn" href="#activity"><span aria-hidden="true">👥</span> نشاط الفريق <span class="feed-sub">مين اعتمد إيه، وطلب إيه</span><span class="badge-n ${S.newCount ? '' : 'hidden'}" id="feed-n" aria-label="أحداث جديدة">${S.newCount || 0}</span></a>
     <form class="search" id="goto" role="search"><input class="t" id="goto-n" inputmode="numeric" autocomplete="off" placeholder="اذهب لسؤال رقم… (مثال: 21)" aria-label="رقم السؤال"><button class="btn" type="submit">افتح</button></form>
@@ -936,12 +973,12 @@ function renderQueue() {
   document.getElementById('out').onclick = signOut;
   const r = document.getElementById('refresh'); if (r) r.onclick = () => { S.dirty = true; route(); };
   const rl = document.getElementById('reload'); if (rl) rl.onclick = async () => { rl.disabled = true; await loadQueue(); renderQueue(); notify('تم تحديث القائمة', '', 'info', 1800); };
-  const mq = document.getElementById('more-q'); if (mq) mq.onclick = () => { S.listLimit = (S.listLimit || 60) + 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
+  const mq = document.getElementById('more-q'); if (mq) mq.onclick = () => { const n = S.listLimit || LIST_FIRST; S.listLimit = n < LIST_PAGE ? LIST_PAGE : n + LIST_PAGE; const y = scrollY; renderQueue(); scrollTo(0, y); };
   bindFooter();
-  const set = patch => { Object.assign(S.view, patch); saveView(); S.listLimit = 60; const y = scrollY; renderQueue(); scrollTo(0, y); };
+  const set = patch => { Object.assign(S.view, patch); saveView(); S.listLimit = LIST_FIRST; const y = scrollY; renderQueue(); scrollTo(0, y); };
   // 6.0: a tile opens its folder (a topic folder with every part on) and slides down to its list
   $app.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => {
-    if (b.dataset.folder !== v.folder) { Object.assign(S.view, { folder: b.dataset.folder, tparts: [], part: '' }); saveView(); S.listLimit = 60; renderQueue(); }
+    if (b.dataset.folder !== v.folder) { Object.assign(S.view, { folder: b.dataset.folder, tparts: [], part: '' }); saveView(); S.listLimit = LIST_FIRST; renderQueue(); }
     toList();
   });
   const tf2 = document.getElementById('to-folders'); if (tf2) tf2.onclick = () => document.querySelector('.fgrid')?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
@@ -983,15 +1020,31 @@ function renderQueue() {
     if (!S.rows.some(x => x.qid === n)) notify(`السؤال رقم ${n} مش ضمن فولدراتك`, 'هحاول أفتحه لو عندك صلاحية عليه.', 'info');
     location.hash = `#q/${n}`;
   };
+  const cs = document.getElementById('chsum'); if (cs) cs.onclick = openChapterSummary;
+  // 7.4: a group opened or closed by hand stays so while the app is open
+  $app.querySelectorAll('details.fgroup').forEach(d => d.addEventListener('toggle', () => { const g = Number(d.dataset.g); if (d.open) fgOpen().add(g); else fgOpen().delete(g); fgSave(); }));
+  bindInstall();
+}
+
+/* 7.4 (owner 17/10): the admin panel as a page of its own (#admin), and the home screen with the two entries (owners and admins) */
+function renderAdmin() {
+  S.bundle = null; S.qid = null; S.navHold = null; closeSheets();
+  $app.innerHTML = mainBar() + `<main class="wrap">${homeRow('🛡️ لوحة الإدارة')}${staffCard() || '<div class="empty"><p>لوحة الإدارة مش متاحة دلوقتي. جرّب تاني بعد شوية.</p></div>'}${appFooter()}</main>`;
+  document.getElementById('out').onclick = signOut;
+  bindFooter(); bindInstall(); bindStaff();
+}
+function bindStaff() {
   $app.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText((S.copyMsgs || {})[b.dataset.copy] || (b.dataset.copy === 'solve' ? MSG_SOLVE : MSG_REVISE), (S.copyHints || {})[b.dataset.copy]));
   const oc = document.getElementById('orph-del'); if (oc) oc.onclick = () => cleanOrphans();   // 6.9
   $app.querySelectorAll('[data-editrun]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.editrun)); if (c) openChapterEdit(c); });   // 6.9
   const ncb = document.getElementById('nc-open'); if (ncb) ncb.onclick = () => openNewChapter();
-  $app.querySelectorAll('details.chap').forEach(d => d.addEventListener('toggle', () => {
-    const id = Number(d.dataset.run), set = new Set(chapOpen());
+  // the open cards (and, 7.4, the cards with their details open) stay open on this device until closed
+  const keep = (sel, key, read) => $app.querySelectorAll(sel).forEach(d => d.addEventListener('toggle', () => {
+    const id = Number(d.dataset.run), set = new Set(read());
     if (d.open) set.add(id); else set.delete(id);
-    try { localStorage.setItem('chapOpen', JSON.stringify([...set])); } catch { }
+    try { localStorage.setItem(key, JSON.stringify([...set])); } catch { }
   }));
+  keep('details.chap', 'chapOpen', chapOpen); keep('details.chap-more', 'chapMore', chapMore);
   const sd = document.getElementById('solver-d'); if (sd) sd.addEventListener('toggle', () => { try { localStorage.setItem('solverOpen', sd.open ? '1' : '0'); } catch { } });
   $app.querySelectorAll('[data-viewpages]').forEach(b => b.onclick = () => {
     const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.viewpages)); if (!c) return;
@@ -1002,12 +1055,24 @@ function renderQueue() {
   $app.querySelectorAll('[data-pages]').forEach(b => b.onclick = () => { const c = (S.chapters || []).find(x => Number(x.run_id) === Number(b.dataset.pages)); if (c) openPagesSheet(c); });
   // 6.0: the admin panel's buttons open a folder on every chapter with no filter (a part of "مستنية تأكيدك" when named), so the list matches its count
   $app.querySelectorAll('[data-gofolder]').forEach(b => b.onclick = () => goFolder(b.dataset.gofolder, { parts: b.dataset.parts ? b.dataset.parts.split(',') : undefined }));
-  const cs = document.getElementById('chsum'); if (cs) cs.onclick = openChapterSummary;
   const aa = document.getElementById('atodo-open'); if (aa) aa.onclick = openAdminActions;   // 6.6
+  $app.querySelectorAll('#staff [data-info]').forEach(b => b.onclick = () => explain(b.dataset.info));   // 7.4: the panel's book buttons (the list page bound them before)
   const sa = document.getElementById('staff-act'); if (sa) sa.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); openAdminActions(); };   // the count in the title: the list, not open/close
-  bindInstall();
-  const ow = document.getElementById('staff'); if (ow) ow.addEventListener('toggle', () => { try { localStorage.setItem('staffOpen', ow.open ? '1' : '0'); } catch { } });
   if (S.isAdmin && S.pipeline) { loadSolver(); loadBackup(); loadAccess(); }   // 7.0: the backup line and the owner's access switches
+}
+function renderHome() {
+  S.bundle = null; S.qid = null; S.navHold = null; closeSheets();
+  staffCard();   // counts what the cards ask of the admin (S.staffAct), as in the panel's title, without drawing the panel
+  const act = S.staffAct || 0, mine = new Set(actionCounts().flatMap(a => a.qids)).size;
+  const entry = (href, ic, name, sub, n, nl) => `<a class="home-btn${n ? '' : ' none'}" href="${href}"><span class="ic" aria-hidden="true">${ic}</span><span class="grow"><b>${name}</b><span class="sub">${sub}</span></span>${n ? `<span class="big-n" aria-label="${n} ${nl}">${n}</span>` : ''}</a>`;
+  $app.innerHTML = mainBar() + `<main class="wrap"><p class="home-hint">اختار اللوحة اللي عايز تدخلها:</p>
+    <nav class="home-nav" aria-label="اللوحات">
+      ${entry('#admin', '🛡️', 'لوحة الإدارة', act ? `${act} يحتاج إجراء` : 'مفيش حاجة مطلوبة من الإدارة دلوقتي بفضل الله', act, 'يحتاج إجراء')}
+      ${entry('#review', '📝', 'لوحة المراجعة', mine ? `المطلوب منك: ${mine} سؤال` : 'مفيش حاجة مطلوبة منك دلوقتي بفضل الله', mine, 'سؤال مطلوب منك')}
+    </nav>${appFooter()}</main>`;
+  document.getElementById('out').onclick = signOut;
+  bindFooter(); bindInstall();
+  scrollTo(0, 0);
 }
 
 /* What students see for each question (student_state from the database, migration 026).
@@ -1356,7 +1421,7 @@ async function renderTopics(chapterId) {
   $app.innerHTML = '<div class="loading">جاري تحميل المواضيع…</div>';
   const d = await rpc('chapter_topics', { p_chapter_id: chapterId });
   const head = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">🏷️ مواضيع ${esc(d?.chapter || '')}</span>`);
-  if (!d) { $app.innerHTML = head + '<main class="wrap"><div class="empty"><p>الشاشة دي للإدارة بس.</p></div></main>'; document.getElementById('back').onclick = () => { location.hash = ''; }; return; }
+  if (!d) { $app.innerHTML = head + '<main class="wrap"><div class="empty"><p>الشاشة دي للإدارة بس.</p></div></main>'; document.getElementById('back').onclick = () => { location.hash = S.isAdmin ? '#admin' : ''; }; return; }
   const groups = d.groups || [], allTopics = groups.map(g => ({ id: g.topic_id, name: g.name }));
   const qrow = (q, tid) => `<li class="tq"><a href="#q/${Number(q.qid)}">${esc(q.qid_display)}</a> <span class="small muted">${esc(STATUS_AR[q.status] || q.status)}</span>
       ${q.state ? `<span class="tag ${q.state === 'confirmed' ? 'ok' : 'amber'}">${q.state === 'confirmed' ? 'متأكد' : 'مقترح'}</span>` : ''}
@@ -1374,7 +1439,7 @@ async function renderTopics(chapterId) {
     ${(d.unclassified || []).length ? `<details class="tgroup"><summary><b>مالهاش موضوع</b> <span class="small muted">${d.unclassified.length} سؤال</span></summary><ol class="tqs">${d.unclassified.map(q => qrow(q, null)).join('')}</ol></details>` : ''}
   </main>`;
   const reload = () => renderTopics(chapterId);
-  document.getElementById('back').onclick = () => { location.hash = ''; };
+  document.getElementById('back').onclick = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = S.isAdmin ? '#admin' : ''; };   // 7.4
   document.getElementById('tp-add').onclick = async () => {
     const name = (prompt('اسم الموضوع الجديد (بالإنجليزي، زي ما في المراجع):') || '').trim(); if (!name) return;
     try { await rpc('topic_add', { p_chapter_id: chapterId, p_name: name }); reload(); } catch (e) { notify('ماتضافش', errText(e), 'info'); }
@@ -1553,7 +1618,7 @@ async function renderBatchReport(id) {
     ${gen.length ? `<h3 class="dayh">على الدفعة كلها</h3><ol class="rlist">${gen.map(l => repLineHTML(l, null, null)).join('')}</ol>` : ''}
     ${!lines.length && !r.hidden ? '<div class="empty">التقرير فاضي.</div>' : ''}
   </main>`;
-  document.getElementById('back').onclick = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = ''; };
+  document.getElementById('back').onclick = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = listHash(); };
   scrollTo(0, 0);
 }
 window.addEventListener('hashchange', e => { S.cameFromApp = !!(e.oldURL && e.oldURL.split('#')[0] === location.href.split('#')[0]); });
@@ -1598,7 +1663,7 @@ async function renderRebuild(qid, mode = 'rebuild') {
     S.rebuild = (await rpc('rebuild_queue')) || [];
     r = S.rebuild.find(x => x.qid === qid);
   }
-  const back = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = RS ? `#q/${qid}` : ''; };
+  const back = () => { if (history.length > 1 && S.cameFromApp) history.back(); else location.hash = RS ? `#q/${qid}` : listHash(); };
   const head = topBar(`<button class="linkbtn" id="back">→ رجوع</button><span class="grow"></span><span class="brand">${RS ? 'رجّعه للحل من جديد' : 'إعادة تركيب السؤال'}</span>`);
   if (!r) {
     $app.innerHTML = head + `<main class="wrap"><div class="empty"><p>${RS ? `السؤال رقم ${esc(String(qid))} مش في حالة ينفع ترجّعه فيها للحل، أو الرجوع للحل مش ضمن صلاحيتك (صلاحية 3 والإدارة).` : `السؤال رقم ${esc(String(qid))} مش مستني إعادة تركيب: يمكن اتكمّل خلاص، أو مش ضمن صلاحيتك.`}</p></div></main>`;
@@ -1695,7 +1760,7 @@ async function renderRebuild(qid, mode = 'rebuild') {
       await Drafts.clear(qid, DK);
       S.dirty = true;
       notify(RS ? `السؤال ${r.qid_display} رجع للحل من جديد بفضل الله` : `تم حفظ السؤال ${r.qid_display} بفضل الله`, RS ? 'اختفى عن الطلاب، وهيتحل من الأول. بعد الحل هيوصلك في "تنتظرك"، ويفضل مخفي لحد الاعتماد.' : 'رجع للحل المعزول. بعد ما يتحل هيوصلك في "تنتظرك"، ويفضل مخفي عن الطلاب لحد اعتمادك.');
-      location.hash = '';
+      location.hash = listHash();
     } catch (e) { btn.disabled = false; err.textContent = errText(e) + ' — مسودتك محفوظة، جرّب تاني.'; }
   };
   scrollTo(0, 0);
@@ -1947,7 +2012,7 @@ function drawActivity(lastSeen) {
     ${list.length ? html : `<div class="empty">مفيش نشاط${F.who !== 'all' || F.kind !== 'all' ? ' بالتصفية دي' : ' لسه'}.</div>`}
     ${S.feedEnd ? '' : `<p><button class="btn block" id="more">عرض أقدم</button></p>`}
   </main>`;
-  document.getElementById('back').onclick = () => { location.hash = ''; };
+  document.getElementById('back').onclick = () => { location.hash = listHash(); };
   $app.querySelectorAll('[data-who]').forEach(b => b.onclick = () => { F.who = b.dataset.who; drawActivity(lastSeen); });
   $app.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { F.kind = b.dataset.kind; drawActivity(lastSeen); });
   const m = document.getElementById('more'); if (m) m.onclick = () => renderActivity(true);
@@ -2237,7 +2302,7 @@ function renderQuestion() {
   ${bar ? `<div class="actions"><button class="bar-help" id="bar-help" type="button" aria-label="إيه الفرق بين الزراير؟">ℹ️</button><div class="actions-in">${bar}</div></div>` : ''}`;
 
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
-  on('back', () => { location.hash = ''; });
+  on('back', () => { location.hash = listHash(); });
   on('prev', () => go(nav.prev)); on('next', () => go(nav.next));
   on('toggle-extra', () => { S.showExtra = !S.showExtra; const y = scrollY; renderQuestion(); scrollTo(0, y); });
   fitActions();
@@ -2319,7 +2384,7 @@ async function afterDecision(qid, title, sub) {
   const now = new Set(listFor().map(r => r.qid));
   const next = before.slice(idx + 1).find(id => now.has(id) && id !== qid) ?? [...now].find(id => id !== qid);
   if (hadTodo && !S.queue.length) setTimeout(() => notify('ما شاء الله، خلّصت كل الأسئلة اللي كانت مستنياك', 'جزاك الله خيرًا. هنبلغك لما يوصل أسئلة جديدة في فولدر "تنتظرك".', 'ok', 7000), 1600);
-  location.hash = next ? `#q/${next}` : '';
+  location.hash = next ? `#q/${next}` : listHash();
 }
 async function doApprove(note) {
   const btn = document.getElementById('approve') || document.getElementById('approve-anyway'); if (btn) btn.disabled = true;
@@ -2928,7 +2993,6 @@ function staffCard() {
   const p = S.pipeline; if (!S.isAdmin || !p) return '';
   const st = p.by_status || {};
   const chs = S.chapters && S.chapters.length ? S.chapters : null;
-  const openState = localStorage.getItem('staffOpen') === '1';
   S.copyMsgs = { solve: MSG_SOLVE, revise: MSG_REVISE };
   S.adminLeft = {}; S.adminActs = []; S.copyHints = {};   // filled by each card (6.5, 6.6, 6.9)
   const body = chs ? chapterCardsHTML(chs) : legacyRows(p);
@@ -2937,15 +3001,17 @@ function staffCard() {
   // and the classification are the admin's. No cards: the bank count, as before.
   const act = chs ? Object.values(S.adminLeft).reduce((x, v) => x + v, 0)
     : (p.unsolved || 0) + (p.awaiting_reason || 0) + (p.open_requests || 0) + (p.consistency_checks || 0);
+  S.staffAct = act;   // 7.4: the same number on the home screen
   const newBtn = S.chapters ? '<div class="row"><div class="grow small muted">كل شابتر جديد يبدأ من هنا: ملفه، وصور صفحاته، ورسايل محادثاته.</div><button class="btn sec" id="nc-open">➕ شابتر جديد</button></div>' : '';
-  return `<details class="staff" ${openState ? 'open' : ''} id="staff"><summary style="cursor:pointer;list-style:none"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
-    <span class="small muted" style="margin-inline-start:8px">${act && chs ? `<button class="staff-act" type="button" id="staff-act">${act} يحتاج إجراء</button>` : act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'} ▾</span></summary>
+  // 7.4 (owner 17/10): the panel is a page of its own now, always open (it was a box that opened and closed above the folders)
+  return `<section class="staff" id="staff"><div class="staff-top"><h2 id="staff-h" style="display:inline">لوحة الإدارة</h2>
+    <span class="small muted" style="margin-inline-start:8px">${act && chs ? `<button class="staff-act" type="button" id="staff-act">${act} يحتاج إجراء</button>` : act ? `${act} يحتاج إجراء` : 'لا شيء يحتاج إجراء'}</span></div>
     ${chs ? adminTodoButton(act) : ''}${backupBoxHTML()}${orphanLine()}${newBtn}${body}
     ${accessBoxHTML()}
     <details class="solver-d" id="solver-d" ${localStorage.getItem('solverOpen') === '1' ? 'open' : ''}><summary>🤖 المحلّل الآلي (مدفوع): <span id="solver-sum" class="small muted">جاري التحميل…</span></summary>
       <div class="row" id="solver-box"><div class="grow small muted">جاري تحميل حالة المحلّل الآلي…</div></div></details>
     ${bankLine(chs) || `<div class="row small muted">في المراجعة ${st.in_review || 0}، معدّل ${st.revised || 0}، ينتظر التعديل ${st.needs_revision || 0}، معتمد ${st.approved || 0}.</div>`}
-  </details>`;
+  </section>`;
 }
 // 6.5 (owner 14/10): the line under the cards = the whole bank, added up from the cards, in the same parts as each card's "منهم" line
 // (before, "في المراجعة" here was the bank's in_review alone, while a card's adds the revised ones). No cards or an older server: the old line.
@@ -3042,10 +3108,10 @@ function openAdminActions() {
 }
 // open the panel, the card (and "✅ شباتر خلصت" if it sits there), and bring the step into view with a short glow
 function goStep(run, step) {
-  const st = document.getElementById('staff'); if (st && !st.open) st.open = true;
   const d = document.querySelector(`details.chap[data-run="${run}"]`); if (!d) return;
   const grp = d.closest('details.chap-done'); if (grp) grp.open = true;
   d.open = true;
+  const more = d.querySelector('details.chap-more'); if (more) more.open = true;   // 7.4: the steps sit in the card's details
   const el = d.querySelector(`.chstep[data-step="${step}"]`) || d;
   el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2600);
@@ -3070,6 +3136,7 @@ function legacyRows(p) {
 // 5.0: chapters with work first (newest first), finished chapters (all approved, nothing to do) grouped at the end
 // 5.8 (owner 8/10): "finished" also needs every question's topics confirmed (and none waiting in "مواضيع تتراجع")
 const chapOpen = () => { try { return JSON.parse(localStorage.getItem('chapOpen') || '[]'); } catch { return []; } };
+const chapMore = () => { try { return JSON.parse(localStorage.getItem('chapMore') || '[]'); } catch { return []; } };   // 7.4: cards with their details open
 const topicLeft = c => { const n = k => Number(c[k]) || 0; return c.topics_confirmed === undefined ? 0 : Math.max(0, n('total') - n('topics_confirmed')) + n('topics_pending_change'); };
 // edited after their topics were confirmed, in this file. 6.5 (migration 064): the bank counts them per file; an older server
 // has no such key, and then the count falls back to the chapter names (a chapter split over two files counts in both cards)
@@ -3187,16 +3254,21 @@ function chapterCard(c) {
   const shared = (c.chapters || []).some(x => (S.chapters || []).some(o => Number(o.run_id) !== Number(c.run_id) && (o.chapters || []).some(y => Number(y.id) === Number(x.id))));
   const fileNote = tot && shared ? '<div class="chap-note small muted">ℹ️ الأرقام دي للملف ده بس. لوحة المراجع بتعدّ الشابتر من كل الملفات.</div>' : '';
   const bars = tot ? `<div class="chap-bars">${progBar('الاعتماد', n('approved'), n('total'), 'a')}${c.topics_confirmed === undefined ? '' : progBar('المواضيع', topicDone(c), n('total'), 't')}</div>` : '';
-  const isOpen = chapOpen().includes(Number(c.run_id));
+  const isOpen = chapOpen().includes(Number(c.run_id)), isMore = chapMore().includes(Number(c.run_id));
   const tagOf = (s, st) => st === 'now' ? ' <span class="tag cobalt">دلوقتي</span>' : st === 'next' ? ' <span class="tag">بعدها</span>' : st === 'wait' && s.wait ? ` <span class="tag">${s.wait}</span>` : '';
+  // 7.4 (owner 17/10): three levels. Closed: the title and the step marks only. Open: what the closed card used to show (what is left,
+  // the two bars, "منهم"). Its «📋 التفاصيل والخطوات»: the rest (the file, the links, the steps with their buttons). Each level stays as left.
   return `<details class="chap" data-run="${Number(c.run_id)}" ${isOpen ? 'open' : ''}>
     <summary><div class="chap-h"><b>${esc(c.chapter)}</b> <span class="small muted">${esc(c.source || '')}${c.years || c.years_auto ? ` (${esc(c.years || c.years_auto)})` : ''}</span></div>${sameTitle(c) && c.file_name ? `<div class="chap-file small muted">📄 <bdi dir="ltr">${esc(c.file_name)}</bdi></div>` : ''}
-      ${trk}<div class="chap-sum small">${sumLine}</div>${bars}${dist}${fileNote}</summary>
+      ${trk}</summary>
+    <div class="chap-l1"><div class="chap-sum small">${sumLine}</div>${bars}${dist}${fileNote}</div>
+    <details class="chap-more" data-run="${Number(c.run_id)}" ${isMore ? 'open' : ''}><summary>📋 التفاصيل والخطوات</summary>
     ${fin ? `<div class="chap-fin">✅ الشابتر اكتمل بفضل الله: ${n('total')} سؤال معتمد، ومواضيعهم كلها متأكدة.</div>` : ''}
     <div class="small muted">${b ? `الدفعة ${esc(b)}، الملف: ${esc(c.file_name || '')}` : 'دفعات قديمة لكل سنة'}</div>
     <div class="tags">${c.pages_prefix && (n('pages_done') || n('page_count')) ? `<button class="linkbtn" type="button" data-viewpages="${Number(c.run_id)}">👁️ اعرض الصفحات</button>` : ''}${DRIVE_RX.test(c.drive_link || '') ? `<a class="linkbtn" href="${esc(c.drive_link)}" target="_blank" rel="noopener noreferrer">📁 الملف على درايف</a>` : ''}<button class="linkbtn" type="button" data-link="${Number(c.run_id)}">${c.drive_link ? 'غيّر لينك درايف' : '➕ لينك درايف'}</button><button class="linkbtn" type="button" data-editrun="${Number(c.run_id)}">✏️ عدّل بيانات الكارت</button></div>
     ${file || n('no_source_pages') ? `<div class="tags">${file}${n('no_source_pages') ? `<span class="tag warn">${n('no_source_pages')} سؤال بدون صفحات مصدر مسجّلة</span>` : ''}</div>` : ''}
     <ol class="chsteps">${steps.map((s, i) => { const st = stOf(s); return `<li data-step="${s.id}" class="chstep ${st}${s.id === rec ? ' rec' : ''}${s.work ? ' work' : ' idle'}${st === 'ok' ? ' ok' : ''}"><span class="st-ic" aria-hidden="true">${st === 'ok' ? '✓' : i + 1}</span><div class="grow"><div class="st-t"><b>${s.name}</b> <span class="small muted">${s.text}</span>${tagOf(s, st)}</div>${s.btn ? `<div class="st-btns">${st === 'now' ? s.btn : s.btn.replace(/\bbtn primary\b/g, 'btn sec')}</div>` : ''}</div></li>`; }).join('')}</ol>
+    </details>
   </details>`;
 }
 /* ---------- v4.8 (item 92 phase 2): ➕ new chapter ----------
@@ -3549,7 +3621,8 @@ function startBackupPoll() {
 }
 function stopBackupPoll() { if (BKP.timer) { clearInterval(BKP.timer); BKP.timer = null; } }
 // another account may sign in on the same device: nothing of the last one's backup state or access list stays
-function resetStaffCaches() { stopBackupPoll(); Object.assign(BKP, { code: 0, st: null, at: 0, note: '', busy: false, since: 0, pending: false, waitNewer: false, prevAt: null, mine: false, denied: false }); ACC.rows = null; ACC.at = 0; ACC.owner = false; }
+function resetStaffCaches() { stopBackupPoll(); Object.assign(BKP, { code: 0, st: null, at: 0, note: '', busy: false, since: 0, pending: false, waitNewer: false, prevAt: null, mine: false, denied: false }); ACC.rows = null; ACC.at = 0; ACC.owner = false;
+  S.fgOpen = null; S.fgFolder = null; try { sessionStorage.removeItem('fgOpen'); } catch { } }   // 7.4: the next account starts with its groups closed
 function finishBackup() {
   stopBackupPoll(); const mine = BKP.mine;
   Object.assign(BKP, { pending: false, waitNewer: false, prevAt: null, mine: false, note: '', since: 0 });

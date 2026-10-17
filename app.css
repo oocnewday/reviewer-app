@@ -859,3 +859,38 @@ details.rb-note summary{cursor:pointer;color:var(--cobalt);font-weight:600;paddi
 .kh-link{direction:ltr;unicode-bidi:isolate;text-align:right;overflow-wrap:anywhere;word-break:break-all;font-size:.88rem;line-height:1.5;margin-top:4px}
 .kh-link a{color:var(--cobalt)}
 .steps.kh bdi{white-space:nowrap}
+/* 7.4 (owner 17/10): the home screen (two entries for owners and admins), «🏠 الرئيسية», the folder groups that close to one line,
+   and the chapter card's third level («📋 التفاصيل والخطوات») */
+.home-hint{font-size:1rem;color:var(--ink-2);margin:6px 2px 12px}
+.home-nav{display:grid;gap:12px;margin:0 0 18px}
+.home-btn{display:flex;align-items:center;gap:14px;text-decoration:none;color:var(--ink);border:2px solid var(--cobalt);background:var(--cobalt-2);border-radius:18px;padding:18px 16px;min-height:88px}
+.home-btn .ic{font-size:2rem;line-height:1}
+.home-btn .grow{flex:1;min-width:0}
+.home-btn b{display:block;font-size:1.2rem}
+.home-btn .sub{display:block;font-size:.92rem;color:var(--ink-2);line-height:1.5;margin-top:2px}
+.home-btn .big-n{flex:0 0 auto;min-width:42px;height:42px;border-radius:999px;background:var(--warn);color:#fff;display:grid;place-items:center;font-weight:700;font-size:1.05rem;padding:0 9px;font-variant-numeric:tabular-nums}
+.home-btn.none{border-color:var(--ok);background:var(--ok-2)}
+@media (prefers-color-scheme:dark){.home-btn .big-n{color:#0E1426}}
+.home-row{display:flex;align-items:center;gap:10px;margin:0 0 12px}
+.home-link{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:6px 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--cobalt);font-weight:600;text-decoration:none}
+.home-here{font-weight:700;color:var(--ink-2);font-size:.95rem}
+.staff-top{margin-bottom:4px}
+details.fgroup{margin:0 0 10px;border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:0 12px}
+details.fgroup[open]{padding-bottom:12px}
+.fgrid summary.fg-sum{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;min-height:52px;padding:6px 0}
+.fgrid summary.fg-sum::-webkit-details-marker{display:none}
+.fgrid summary.fg-sum::before{content:'◂';color:var(--cobalt);flex:0 0 auto;transition:transform .15s}
+.fgrid details[open]>summary.fg-sum::before{transform:rotate(-90deg)}
+.fgrid summary.fg-sum .fg-h{flex:1;margin:0;font-size:1.02rem}
+.fgrid summary.fg-sum .fg-h::after{display:none}
+.fg-n{flex:0 0 auto;min-width:36px;height:32px;border-radius:999px;display:grid;place-items:center;padding:0 10px;font-weight:700;font-variant-numeric:tabular-nums;background:var(--line-2);color:var(--ink-2)}
+.fg-n.hot{background:var(--cobalt);color:#fff}
+.fg-n.zero{background:var(--ok-2);color:var(--ok)}
+@media (prefers-color-scheme:dark){.fg-n.hot{color:#0E1426}}
+.staff .chap-l1{padding-inline-start:18px}
+.staff details.chap-more{margin:8px 0 0;padding-inline-start:18px}
+.staff details.chap-more>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:4px 12px;border:1px solid var(--line);border-radius:999px;color:var(--cobalt);font-weight:600;font-size:.92rem;background:var(--surface)}
+.staff details.chap-more>summary::-webkit-details-marker{display:none}
+.staff details.chap-more>summary::after{content:'▾';transition:transform .15s}
+.staff details.chap-more[open]>summary::after{transform:rotate(180deg)}
+.staff details.chap-more[open]>summary{margin-bottom:6px}
